@@ -1,24 +1,30 @@
-import logo from './logo.svg';
-import './App.css';
+import React, { useState } from 'react';
+import { Routes, Route } from 'react-router-dom';  // ไม่ต้อง import Router
+import Home from './pages/Home';
+import Category from './pages/Category';
+import ProductDetail from './pages/ProductDetail';
+import Cart from './components/Cart';
+import Header from './components/Navbar';
+import LoginForm from './components/LoginForm';
+import RegisterForm from './components/RegisterForm';
+import './App.css';  // อย่าลืม import CSS ของคุณ
 
 function App() {
+  const [cart, setCart] = useState([]);
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <>
+      <Header />
+      <Routes>
+        <Route path="/" element={<Home cart={cart} setCart={setCart} />} />
+        <Route path="/category/:categoryName" element={<Category cart={cart} setCart={setCart} />} />
+        <Route path="/product/:productId" element={<ProductDetail cart={cart} setCart={setCart} />} />
+        <Route path="/cart" element={<Cart cart={cart} />} />
+        <Route path="/login" element={<LoginForm />} />
+        <Route path="/register" element={<RegisterForm />} />
+      </Routes>
+      <Cart cart={cart} />
+    </>
   );
 }
 
