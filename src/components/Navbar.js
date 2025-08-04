@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { FaUserCircle } from 'react-icons/fa'; // ไอคอนรูปคน
+import { FaUserCircle } from 'react-icons/fa';
 
 export default function Navbar() {
   const { user, logout } = useAuth();
@@ -12,24 +12,42 @@ export default function Navbar() {
         <h1 className="text-2xl font-bold tracking-wide">KP VINTAGE</h1>
 
         <div className="flex items-center space-x-6 text-sm sm:text-base font-medium">
-          <Link to="/" className="hover:underline hover:text-yellow-200 transition">หน้าแรก</Link>
-          <Link to="/cart" className="hover:underline hover:text-yellow-200 transition">ตะกร้า</Link>
+          <Link to="/" className="hover:underline hover:text-yellow-200 transition">
+            หน้าแรก
+          </Link>
+          <Link to="/cart" className="hover:underline hover:text-yellow-200 transition">
+            ตะกร้า
+          </Link>
 
           {user ? (
-            <>
-              <Link to="/profile" className="flex items-center space-x-2 hover:underline hover:text-yellow-200 transition">
-                <FaUserCircle size={20} />
+            <div className="flex items-center space-x-4">
+              <Link
+                to="/profile"
+                className="flex items-center space-x-2 hover:underline hover:text-yellow-200 transition"
+              >
+                {user.profile_image ? (
+                  <img
+                    src={user.profile_image}
+                    alt="Profile"
+                    className="w-6 h-6 rounded-full object-cover"
+                  />
+                ) : (
+                  <FaUserCircle size={24} />
+                )}
                 <span>สวัสดี, {user.username}</span>
               </Link>
+
               <button
                 onClick={logout}
                 className="hover:underline hover:text-yellow-200 transition"
               >
                 ออกจากระบบ
               </button>
-            </>
+            </div>
           ) : (
-            <Link to="/login" className="hover:underline hover:text-yellow-200 transition">เข้าสู่ระบบ</Link>
+            <Link to="/login" className="hover:underline hover:text-yellow-200 transition">
+              เข้าสู่ระบบ
+            </Link>
           )}
         </div>
       </div>

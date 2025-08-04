@@ -3,10 +3,11 @@ import { Routes, Route } from 'react-router-dom';  // ไม่ต้อง impo
 import Home from './pages/Home';
 import Category from './pages/Category';
 import ProductDetail from './pages/ProductDetail';
-import Cart from './components/Cart';
+import Cart from './pages/Cart';
 import Header from './components/Navbar';
-import LoginForm from './components/LoginForm';
-import RegisterForm from './components/RegisterForm';
+import LoginForm from './pages/LoginForm';
+import RegisterForm from './pages/RegisterForm';
+import ProfilePage from './pages/ProfilePage';
 import './App.css';  // อย่าลืม import CSS ของคุณ
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
         <Route path="/cart" element={<Cart cart={cart} />} />
         <Route path="/login" element={<LoginForm />} />
         <Route path="/register" element={<RegisterForm />} />
+        <Route path="/profile" element={<ProfilePage />} />
       </Routes>
       <Cart cart={cart} />
     </>
