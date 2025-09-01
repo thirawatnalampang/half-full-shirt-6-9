@@ -1,10 +1,10 @@
 export const products = [
-  {
+    {
     id: 1,
     name: 'เสื้อวง The Beatles',
     price: 490,
     category: 'เสื้อวง',
-    image: 'https://example.com/shirt-beatles.jpg',
+    image: '/assets/categories/shirt2.png', // ✅ เรียกใช้ path จาก public
     description: 'เสื้อวงลาย The Beatles งานวินเทจหายาก สกรีนสวย เนื้อผ้านุ่มใส่สบาย',
   },
   {

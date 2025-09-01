@@ -8,7 +8,10 @@ import Header from './components/Navbar';
 import LoginForm from './pages/LoginForm';
 import RegisterForm from './pages/RegisterForm';
 import ProfilePage from './pages/ProfilePage';
+import AdminPage from './pages/admin/AdminPage';
+
 import './App.css';
+
 
 function App() {
   const [cart, setCart] = useState([]);
@@ -24,6 +27,7 @@ function App() {
         <Route path="/login" element={<LoginForm />} />
         <Route path="/register" element={<RegisterForm />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/admin" element={<AdminPage />} />
       </Routes>
       {/* ไม่มี <Cart /> ลอยล่างขวาแล้ว */}
     </>

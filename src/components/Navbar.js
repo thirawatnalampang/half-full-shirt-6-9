@@ -1,16 +1,29 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { FaUserCircle } from 'react-icons/fa';
+import { FaUserCircle, FaUsers } from 'react-icons/fa';
 
 export default function Navbar() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
     <nav className="bg-[#6b3e26] text-white py-4 px-6 shadow-md">
       <div className="max-w-6xl mx-auto flex justify-between items-center">
-        <h1 className="text-2xl font-bold tracking-wide">KP VINTAGE</h1>
+        {/* Logo / ชื่อร้าน */}
+        <h1
+          className="text-2xl font-bold tracking-wide cursor-pointer"
+          onClick={() => navigate('/')}
+        >
+          KP VINTAGE
+        </h1>
 
+        {/* เมนูด้านขวา */}
         <div className="flex items-center space-x-6 text-sm sm:text-base font-medium">
           <Link to="/" className="hover:underline hover:text-yellow-200 transition">
             หน้าแรก
@@ -19,6 +32,18 @@ export default function Navbar() {
             ตะกร้า
           </Link>
 
+          {/* แสดงเฉพาะเมื่อเป็นแอดมิน */}
+          {user?.role === 'admin' && (
+            <Link
+              to="/admin"
+              className="flex items-center space-x-2 hover:underline hover:text-yellow-200 transition"
+            >
+              <FaUsers size={18} />
+              <span>Admin</span>
+            </Link>
+          )}
+
+          {/* User / Login-Logout */}
           {user ? (
             <div className="flex items-center space-x-4">
               <Link
@@ -38,7 +63,7 @@ export default function Navbar() {
               </Link>
 
               <button
-                onClick={logout}
+                onClick={handleLogout}
                 className="hover:underline hover:text-yellow-200 transition"
               >
                 ออกจากระบบ
