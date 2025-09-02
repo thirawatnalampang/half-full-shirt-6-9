@@ -197,6 +197,7 @@ app.post('/api/login', async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ message: 'กรุณากรอกข้อมูลให้ครบ' });
   }
+
   try {
     const query = 'SELECT * FROM users WHERE email=$1';
     const result = await pool.query(query, [email]);
@@ -211,12 +212,22 @@ app.post('/api/login', async (req, res) => {
       return res.status(403).json({ message: 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ' });
     }
 
-    // เปรียบเทียบรหัสผ่านแบบ bcrypt
-    const ok = await bcrypt.compare(password, user.password);
+    // === รองรับทั้ง hash และ plain (เช่น admin ที่เก็บ "12") ===
+    let ok = false;
+    const pass = String(user.password || '');
+
+    const isHash = pass.startsWith('$2a$') || pass.startsWith('$2b$') || pass.startsWith('$2y$');
+    if (isHash) {
+      ok = await bcrypt.compare(password, pass);
+    } else {
+      ok = (password === pass);
+    }
+
     if (!ok) {
       return res.status(401).json({ message: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
     }
 
+    // login สำเร็จ
     lastLoggedInUser = email;
     console.log(`User เข้าสู่ระบบ: ${email}`);
 
@@ -228,7 +239,6 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
   }
 });
-
 app.get('/api/last-logged-in-user', (req, res) => {
   if (!lastLoggedInUser) return res.json({ message: 'ไม่มีผู้ใช้ล็อกอินล่าสุด' });
   res.json({ lastLoggedInUser });
