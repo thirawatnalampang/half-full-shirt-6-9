@@ -99,13 +99,11 @@ export default function ProfilePage() {
       });
 
       if (!res.ok) {
-        // อ่านข้อความ error จาก backend (สมมติ backend ส่ง { message: '...' })
         let errorMsg = 'บันทึกข้อมูลไม่สำเร็จ';
         try {
           const errorData = await res.json();
           if (errorData.message) errorMsg = errorData.message;
         } catch {
-          // fallback อ่านข้อความธรรมดา
           const errorText = await res.text();
           if (errorText) errorMsg = errorText;
         }
@@ -114,15 +112,29 @@ export default function ProfilePage() {
 
       const updatedUser = await res.json();
 
+      // ✅ คงรูปเดิมถ้า backend ไม่ส่ง profile_image มา
       setForm(prev => ({
         ...prev,
-        profile_image: updatedUser.profile_image || '',
+        username: updatedUser.username ?? prev.username,
+        address: updatedUser.address ?? prev.address,
+        phone: updatedUser.phone ?? prev.phone,
+        profile_image: updatedUser.profile_image ?? prev.profile_image,
         password: '',
         passwordConfirm: '',
       }));
 
+      // ✅ จุดแก้หลัก: merge user เดิม + คง role/isAdmin (กันปุ่ม Admin หาย)
+      setUser(prev => ({
+        ...prev,
+        ...updatedUser,
+        role: updatedUser.role ?? prev?.role,
+        isAdmin: updatedUser.isAdmin ?? prev?.isAdmin,
+        // กัน key สำคัญหายไปด้วย เช่น email / profile_image
+        email: updatedUser.email ?? prev?.email,
+        profile_image: updatedUser.profile_image ?? prev?.profile_image,
+      }));
+
       alert('บันทึกข้อมูลสำเร็จ');
-      setUser(updatedUser);
     } catch (err) {
       alert(err.message);
     }

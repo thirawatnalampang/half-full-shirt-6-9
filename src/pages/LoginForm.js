@@ -1,15 +1,27 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
+const SERVER_URL = 'http://localhost:3000';
+
 export default function LoginPage() {
+  const { login, user } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const { login } = useAuth();
+
   const navigate = useNavigate();
   const location = useLocation();
-  const from = location.state?.from || '/'; // ถ้ามาจากหน้า protected จะเด้งกลับหน้าเดิม
+
+  // ถ้า ProtectedRoute ส่ง state มาแบบ { from: location }
+  const fromPath = location.state?.from?.pathname || '/';
+
+  // ✅ ถ้า “ล็อกอินแล้ว” และยังอยู่หน้า Login → เด้งออกทันที (กันอาการ Navbar ไปก่อนหน้า)
+  useEffect(() => {
+    if (user) {
+      navigate(fromPath, { replace: true });
+    }
+  }, [user, fromPath, navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -20,7 +32,8 @@ export default function LoginPage() {
 
     try {
       setSubmitting(true);
-      const res = await fetch('/api/login', {
+
+      const res = await fetch(`${SERVER_URL}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -29,14 +42,14 @@ export default function LoginPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || 'Login failed');
 
-      // ✅ กันเหนียว: ถ้า backend ยังไม่ส่ง role มา ให้ตั้งเป็น 'user'
+      // ✅ กันกรณี backend ไม่ส่ง role มา
       const safeUser = { role: 'user', ...data.user };
 
+      // อัปเดต context -> Navbar จะอัปเดตตาม (แต่เราจะ navigate ทับทันที)
       login(safeUser);
 
-      // ถ้าเป็นแอดมินและคุณอยากพาเข้าหน้า /admin ทันที:
-      // navigate(safeUser.role === 'admin' ? '/admin' : from);
-      navigate(from);
+      // ✅ เด้งไปหน้าเดิม หรือหน้าแรก โดย replace เพื่อไม่ให้ย้อนกลับมาหน้า login ด้วยปุ่ม back
+      navigate(fromPath, { replace: true });
     } catch (err) {
       alert('เข้าสู่ระบบไม่สำเร็จ: ' + err.message);
     } finally {

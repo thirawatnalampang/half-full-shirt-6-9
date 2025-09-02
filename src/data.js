@@ -27,7 +27,7 @@ export const products = [
     id: 4,
     name: 'เสื้อผจญภัย Fools Journey',
     price: 520,
-    category: 'เสื้อผจญภัย',
+    category: 'เสื้อผ้าบาง',
     image: 'https://example.com/shirt-fools.jpg',
     description: 'เสื้อผจญภัยลายทางเดินและป่า เหมาะกับสายแคมป์ปิ้ง ชอบธรรมชาติ',
   },

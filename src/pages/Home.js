@@ -5,7 +5,7 @@ const categories = [
   { name: 'เสื้อวง',     slug: 'band',      image: '/assets/categories/shirt2.png' },
   { name: 'เสื้อวินเทจ', slug: 'vintage',   image: '/assets/categories/shirt3.png' },
   { name: 'เสื้อฮาเล่',  slug: 'harley',    image: '/assets/categories/shirt4.png' },
-  { name: 'เสื้อผ้าบาง', slug: 'adventure', image: '/assets/categories/shirt5.png' },
+  { name: 'เสื้อผ้าบาง', slug: 'thin', image: '/assets/categories/shirt5.png' },
 ];
 
 const features = [
