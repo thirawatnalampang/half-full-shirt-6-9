@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const { Pool } = require('pg');
@@ -5,9 +7,11 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
+const nodemailer = require('nodemailer');
+const bcrypt = require('bcrypt');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // ====== Config ======
 const uploadDir = path.join(__dirname, 'uploads');
@@ -22,11 +26,11 @@ app.use(bodyParser.json());
 
 // ====== DB Connect ======
 const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'clothing_store', // ชื่อ DB
-  password: '123456',
-  port: 5432,
+  user: process.env.PGUSER || 'postgres',
+  host: process.env.PGHOST || 'localhost',
+  database: process.env.PGDATABASE || 'clothing_store',
+  password: process.env.PGPASSWORD || '123456',
+  port: Number(process.env.PGPORT) || 5432,
 });
 
 pool.connect()
@@ -40,57 +44,139 @@ pool.connect()
 
 // ====== Multer Storage ======
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const filename = `${Date.now()}${ext}`;
-    cb(null, filename);
-  },
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
 });
 const upload = multer({ storage });
 
+// ====== Nodemailer (Mail Transport) ======
+const transporter = nodemailer.createTransport({
+  service: 'gmail', // ใช้ Gmail; ถ้าใช้ SMTP อื่นเปลี่ยนเป็น host/port/secure/auth ตามผู้ให้บริการ
+  auth: {
+    user: process.env.MAIL_USER,
+    pass: process.env.MAIL_PASS,
+  },
+});
+
+// ====== OTP Store (in-memory) ======
+// โครงสร้าง: { [email]: { code, expireAt: number(ms), lastSentAt: number(ms) } }
+const otpStore = {};
+const OTP_EXPIRE_MIN = Number(process.env.OTP_EXPIRE_MIN || 10);
+const OTP_EXPIRE_MS = OTP_EXPIRE_MIN * 60 * 1000;
+const OTP_COOLDOWN_MS = 60 * 1000; // ส่งซ้ำได้ทุก 60 วิ
+
+function genOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString(); // 6 หลัก
+}
+function now() {
+  return Date.now();
+}
+function cleanupOtp(email) {
+  delete otpStore[email];
+}
+
 // ==================== PROFILE API ====================
 app.post('/api/profile/upload', upload.single('image'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ message: 'ไม่มีไฟล์อัปโหลด' });
-  }
+  if (!req.file) return res.status(400).json({ message: 'ไม่มีไฟล์อัปโหลด' });
   const fileUrl = `/uploads/${req.file.filename}`;
   res.json({ url: fileUrl });
 });
 
-// สมัครสมาชิก
-app.post('/api/register', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ message: 'กรุณากรอกข้อมูลให้ครบ' });
-  }
+// ==================== OTP: ส่งรหัสไปอีเมล ====================
+app.post('/api/send-otp', async (req, res) => {
   try {
-    const checkQuery = 'SELECT * FROM users WHERE email = $1';
-    const checkResult = await pool.query(checkQuery, [email]);
-    if (checkResult.rows.length > 0) {
-      return res.status(400).json({ message: 'อีเมลนี้ถูกใช้แล้ว' });
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ message: 'กรุณาส่งอีเมล' });
+
+    // กันสแปม: cooldown
+    const record = otpStore[email];
+    if (record && record.lastSentAt && (now() - record.lastSentAt) < OTP_COOLDOWN_MS) {
+      const waitSec = Math.ceil((OTP_COOLDOWN_MS - (now() - record.lastSentAt)) / 1000);
+      return res.status(429).json({ message: `โปรดรอ ${waitSec} วินาที แล้วลองส่งใหม่อีกครั้ง` });
     }
 
-    const role = 'user';
-    const createdAt = new Date();
-    const insertQuery = `
-      INSERT INTO users (email, password, role, created_at)
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `;
-    const insertResult = await pool.query(insertQuery, [email, password, role, createdAt]);
+    const code = genOtp();
+    otpStore[email] = {
+      code,
+      expireAt: now() + OTP_EXPIRE_MS,
+      lastSentAt: now(),
+    };
 
-    console.log(`User สมัครใหม่: ${email}`);
-    res.status(201).json({ message: `สมัครสมาชิกสำเร็จ: ${email}`, user: insertResult.rows[0] });
+    // ส่งอีเมล
+    await transporter.sendMail({
+      from: process.env.MAIL_FROM || process.env.MAIL_USER,
+      to: email,
+      subject: 'รหัสยืนยันการสมัครสมาชิก (OTP)',
+      text: `รหัส OTP ของคุณคือ ${code} (หมดอายุภายใน ${OTP_EXPIRE_MIN} นาที)`,
+      html: `
+        <div style="font-family:system-ui,Arial,sans-serif;font-size:16px;color:#222">
+          <p>รหัส OTP ของคุณคือ</p>
+          <div style="font-size:28px;font-weight:700;letter-spacing:2px">${code}</div>
+          <p>รหัสจะหมดอายุภายใน <strong>${OTP_EXPIRE_MIN} นาที</strong></p>
+        </div>
+      `,
+    });
+
+    return res.json({ message: 'ส่ง OTP ไปที่อีเมลแล้ว' });
   } catch (err) {
-    console.error('Error in register:', err);
-    res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
+    console.error('send-otp error:', err);
+    return res.status(500).json({ message: 'ส่ง OTP ไม่สำเร็จ' });
   }
 });
 
-// นับจำนวนผู้ใช้
+// ==================== สมัครสมาชิก (พร้อมตรวจ OTP + แฮชพาส) ====================
+app.post('/api/register', async (req, res) => {
+  const { email, password, otp } = req.body || {};
+  if (!email || !password || !otp) {
+    return res.status(400).json({ message: 'กรุณากรอก email, password และ otp ให้ครบ' });
+  }
+
+  try {
+    // 1) ตรวจ OTP
+    const record = otpStore[email];
+    if (!record) {
+      return res.status(400).json({ message: 'ยังไม่ได้ส่ง OTP หรือ OTP หมดอายุ' });
+    }
+    if (now() > record.expireAt) {
+      cleanupOtp(email);
+      return res.status(400).json({ message: 'OTP หมดอายุ กรุณาขอรหัสใหม่' });
+    }
+    if (String(otp) !== String(record.code)) {
+      return res.status(400).json({ message: 'OTP ไม่ถูกต้อง' });
+    }
+
+    // 2) เช็กอีเมลซ้ำ
+    const checkQuery = 'SELECT 1 FROM users WHERE email = $1';
+    const checkResult = await pool.query(checkQuery, [email]);
+    if (checkResult.rows.length > 0) {
+      cleanupOtp(email);
+      return res.status(400).json({ message: 'อีเมลนี้ถูกใช้แล้ว' });
+    }
+
+    // 3) แฮชรหัสผ่าน
+    const hashed = await bcrypt.hash(password, 10);
+
+    // 4) บันทึกผู้ใช้
+    const role = 'user';
+    const insertQuery = `
+      INSERT INTO users (email, password, role, email_verified, created_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      RETURNING email, role, email_verified, created_at
+    `;
+    const insertResult = await pool.query(insertQuery, [email, hashed, role, true]);
+
+    // 5) ล้าง OTP
+    cleanupOtp(email);
+
+    console.log(`User สมัครใหม่: ${email}`);
+    return res.status(201).json({ message: `สมัครสมาชิกสำเร็จ: ${email}`, user: insertResult.rows[0] });
+  } catch (err) {
+    console.error('Error in register:', err);
+    return res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
+  }
+});
+
+// ==================== นับจำนวนผู้ใช้ ====================
 app.get('/api/users/count', async (req, res) => {
   try {
     const countResult = await pool.query('SELECT COUNT(*) FROM users');
@@ -105,21 +191,38 @@ app.get('/api/users/count', async (req, res) => {
 // เก็บ user ล่าสุดที่ login
 let lastLoggedInUser = null;
 
+// ==================== ล็อกอิน (เช็กรหัสผ่าน + เช็กยืนยันอีเมล) ====================
 app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};
   if (!email || !password) {
     return res.status(400).json({ message: 'กรุณากรอกข้อมูลให้ครบ' });
   }
   try {
-    const query = 'SELECT * FROM users WHERE email=$1 AND password=$2';
-    const result = await pool.query(query, [email, password]);
+    const query = 'SELECT * FROM users WHERE email=$1';
+    const result = await pool.query(query, [email]);
     if (result.rows.length === 0) {
+      return res.status(401).json({ message: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
+    }
+
+    const user = result.rows[0];
+
+    // ยังไม่ได้ยืนยันอีเมล
+    if (user.email_verified === false) {
+      return res.status(403).json({ message: 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ' });
+    }
+
+    // เปรียบเทียบรหัสผ่านแบบ bcrypt
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) {
       return res.status(401).json({ message: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
     }
 
     lastLoggedInUser = email;
     console.log(`User เข้าสู่ระบบ: ${email}`);
-    res.json({ message: `เข้าสู่ระบบสำเร็จ: ${email}`, user: result.rows[0] });
+
+    // อย่าส่ง password กลับไป
+    const { password: _ignored, ...safeUser } = user;
+    res.json({ message: `เข้าสู่ระบบสำเร็จ: ${email}`, user: safeUser });
   } catch (err) {
     console.error('Error in login:', err);
     res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
@@ -127,12 +230,11 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.get('/api/last-logged-in-user', (req, res) => {
-  if (!lastLoggedInUser) {
-    return res.json({ message: 'ไม่มีผู้ใช้ล็อกอินล่าสุด' });
-  }
+  if (!lastLoggedInUser) return res.json({ message: 'ไม่มีผู้ใช้ล็อกอินล่าสุด' });
   res.json({ lastLoggedInUser });
 });
 
+// ==================== โปรไฟล์ ====================
 app.get('/api/profile', async (req, res) => {
   const email = req.query.email;
   if (!email) return res.status(400).json({ message: 'กรุณาส่ง email มา' });
@@ -154,7 +256,7 @@ app.put('/api/profile', async (req, res) => {
   if (!email) return res.status(400).json({ message: 'กรุณาส่ง email มา' });
 
   try {
-    const checkUsernameQuery = 'SELECT * FROM users WHERE username=$1 AND email<>$2';
+    const checkUsernameQuery = 'SELECT 1 FROM users WHERE username=$1 AND email<>$2';
     const checkUsernameResult = await pool.query(checkUsernameQuery, [username, email]);
     if (checkUsernameResult.rows.length > 0) {
       return res.status(400).json({ message: 'ชื่อนี้ถูกใช้ไปแล้ว กรุณาใช้ชื่ออื่น' });
@@ -162,18 +264,21 @@ app.put('/api/profile', async (req, res) => {
 
     let updateQuery;
     let params;
+
     if (password) {
+      // ถ้าจะอัปเดตรหัสผ่าน ให้แฮชใหม่
+      const hashed = await bcrypt.hash(password, 10);
       updateQuery = `
         UPDATE users SET
           username=$1, address=$2, phone=$3, profile_image=$4, password=$5
-        WHERE email=$6 RETURNING *
+        WHERE email=$6 RETURNING email, username, address, phone, profile_image
       `;
-      params = [username, address, phone, profile_image, password, email];
+      params = [username, address, phone, profile_image, hashed, email];
     } else {
       updateQuery = `
         UPDATE users SET
           username=$1, address=$2, phone=$3, profile_image=$4
-        WHERE email=$5 RETURNING *
+        WHERE email=$5 RETURNING email, username, address, phone, profile_image
       `;
       params = [username, address, phone, profile_image, email];
     }
@@ -216,11 +321,13 @@ app.post('/api/admin/categories', async (req, res) => {
   }
 });
 
-// GET /api/admin/products
+// ==================== PRODUCTS CRUD ====================
 app.get('/api/admin/products', async (req, res) => {
   try {
-    const q = `SELECT id, name, price, stock, category_id, description, image, status, created_at, updated_at
-               FROM products ORDER BY id DESC`;
+    const q = `
+      SELECT id, name, price, stock, category_id, description, image, status, created_at, updated_at
+      FROM products ORDER BY id DESC
+    `;
     const result = await pool.query(q);
     return res.status(200).json(result.rows);
   } catch (err) {
@@ -229,7 +336,6 @@ app.get('/api/admin/products', async (req, res) => {
   }
 });
 
-// POST /api/admin/products (รองรับไฟล์ใหม่)
 app.post('/api/admin/products', upload.single('image'), async (req, res) => {
   try {
     const { name, price, stock, category_id, description } = req.body;
@@ -261,7 +367,6 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
   }
 });
 
-// PUT /api/admin/products/:id (รองรับไฟล์ใหม่หรือ oldImage)
 app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -271,9 +376,7 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
       return res.status(400).json({ message: 'ชื่อสินค้าเป็นค่าว่างไม่ได้' });
     }
 
-    const imagePath = req.file
-      ? `/uploads/${req.file.filename}`
-      : oldImage || null;
+    const imagePath = req.file ? `/uploads/${req.file.filename}` : (oldImage || null);
 
     const q = `
       UPDATE products
@@ -302,16 +405,13 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
   }
 });
 
-// DELETE /api/admin/products/:id
 app.delete('/api/admin/products/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ message: 'รหัสสินค้าไม่ถูกต้อง' });
 
     const result = await pool.query('DELETE FROM products WHERE id=$1', [id]);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'ไม่พบสินค้า' });
-    }
+    if (result.rowCount === 0) return res.status(404).json({ message: 'ไม่พบสินค้า' });
 
     return res.status(200).json({ success: true, message: 'ลบสำเร็จ' });
   } catch (err) {
@@ -320,7 +420,6 @@ app.delete('/api/admin/products/:id', async (req, res) => {
   }
 });
 
-// ✅ GET /api/products/by-category/:categoryId
 app.get('/api/products/by-category/:categoryId', async (req, res) => {
   try {
     const { categoryId } = req.params;
@@ -338,7 +437,6 @@ app.get('/api/products/by-category/:categoryId', async (req, res) => {
   }
 });
 
-// ✅ GET /api/admin/products/:id
 app.get('/api/admin/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -357,6 +455,7 @@ app.get('/api/admin/products/:id', async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 });
+
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);
 });
