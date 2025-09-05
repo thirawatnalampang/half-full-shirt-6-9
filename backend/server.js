@@ -81,28 +81,40 @@ app.post('/api/profile/upload', upload.single('image'), (req, res) => {
   const fileUrl = `/uploads/${req.file.filename}`;
   res.json({ url: fileUrl });
 });
+// ช่วยตรวจอีเมลฝั่งเซิร์ฟเวอร์ด้วย (กันกรณีข้าม frontend)
+const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim());
 
-// ==================== OTP: ส่งรหัสไปอีเมล ====================
+// ==================== OTP: ส่งรหัสไปอีเมล (สมัครสมาชิก) ====================
 app.post('/api/send-otp', async (req, res) => {
   try {
-    const { email } = req.body || {};
-    if (!email) return res.status(400).json({ message: 'กรุณาส่งอีเมล' });
+    const rawEmail = (req.body?.email ?? '').trim();
+    const email = rawEmail.toLowerCase();
 
-    // กันสแปม: cooldown
+    if (!email || !isValidEmail(email)) {
+      return res.status(400).json({ message: 'กรุณาส่งอีเมลให้ถูกต้อง' });
+    }
+
+    // ❗ เช็กอีเมลซ้ำก่อนส่ง OTP
+    const exists = await pool.query('SELECT 1 FROM users WHERE email = $1', [email]);
+    if (exists.rowCount > 0) {
+      return res.status(409).json({ message: 'อีเมลนี้ถูกใช้แล้ว กรุณาเข้าสู่ระบบหรือกดลืมรหัสผ่าน' });
+    }
+
+    // กันสแปม: cooldown 60 วิ (หรือใช้ค่าคงที่ของคุณ)
     const record = otpStore[email];
     if (record && record.lastSentAt && (now() - record.lastSentAt) < OTP_COOLDOWN_MS) {
       const waitSec = Math.ceil((OTP_COOLDOWN_MS - (now() - record.lastSentAt)) / 1000);
       return res.status(429).json({ message: `โปรดรอ ${waitSec} วินาที แล้วลองส่งใหม่อีกครั้ง` });
     }
 
-    const code = genOtp();
+    // สร้าง/อัปเดต OTP (ส่งใหม่ให้ทับของเก่า)
+    const code = genOtp(); // เช่น 6 หลัก
     otpStore[email] = {
       code,
-      expireAt: now() + OTP_EXPIRE_MS,
+      expireAt: now() + OTP_EXPIRE_MS,  // เช่น 10 นาที
       lastSentAt: now(),
     };
 
-    // ส่งอีเมล
     await transporter.sendMail({
       from: process.env.MAIL_FROM || process.env.MAIL_USER,
       to: email,
@@ -124,15 +136,26 @@ app.post('/api/send-otp', async (req, res) => {
   }
 });
 
-// ==================== สมัครสมาชิก (พร้อมตรวจ OTP + แฮชพาส) ====================
+// ==================== สมัครสมาชิก (ตรวจอีเมลซ้ำ + ตรวจ OTP + แฮชพาส) ====================
 app.post('/api/register', async (req, res) => {
-  const { email, password, otp } = req.body || {};
-  if (!email || !password || !otp) {
-    return res.status(400).json({ message: 'กรุณากรอก email, password และ otp ให้ครบ' });
-  }
-
   try {
-    // 1) ตรวจ OTP
+    const rawEmail = (req.body?.email ?? '').trim();
+    const email = rawEmail.toLowerCase();
+    const { password, otp } = req.body || {};
+
+    if (!email || !isValidEmail(email) || !password || !otp) {
+      return res.status(400).json({ message: 'กรุณากรอก email, password และ otp ให้ครบและถูกต้อง' });
+    }
+
+    // ✅ เช็กอีเมลซ้ำก่อน (กัน race และตอบสถานะที่เหมาะสม)
+    const exists = await pool.query('SELECT 1 FROM users WHERE email = $1', [email]);
+    if (exists.rowCount > 0) {
+      // ล้าง OTP เฉพาะกรณีที่คุณต้องการ (ไม่จำเป็นก็ได้)
+      cleanupOtp(email);
+      return res.status(409).json({ message: 'อีเมลนี้ถูกใช้แล้ว กรุณาเข้าสู่ระบบ' });
+    }
+
+    // ตรวจ OTP
     const record = otpStore[email];
     if (!record) {
       return res.status(400).json({ message: 'ยังไม่ได้ส่ง OTP หรือ OTP หมดอายุ' });
@@ -145,18 +168,10 @@ app.post('/api/register', async (req, res) => {
       return res.status(400).json({ message: 'OTP ไม่ถูกต้อง' });
     }
 
-    // 2) เช็กอีเมลซ้ำ
-    const checkQuery = 'SELECT 1 FROM users WHERE email = $1';
-    const checkResult = await pool.query(checkQuery, [email]);
-    if (checkResult.rows.length > 0) {
-      cleanupOtp(email);
-      return res.status(400).json({ message: 'อีเมลนี้ถูกใช้แล้ว' });
-    }
-
-    // 3) แฮชรหัสผ่าน
+    // แฮชรหัสผ่าน
     const hashed = await bcrypt.hash(password, 10);
 
-    // 4) บันทึกผู้ใช้
+    // บันทึกผู้ใช้ (email_verified = true เพราะยืนยันด้วย OTP แล้ว)
     const role = 'user';
     const insertQuery = `
       INSERT INTO users (email, password, role, email_verified, created_at)
@@ -165,7 +180,7 @@ app.post('/api/register', async (req, res) => {
     `;
     const insertResult = await pool.query(insertQuery, [email, hashed, role, true]);
 
-    // 5) ล้าง OTP
+    // ล้าง OTP (ใช้แล้วทิ้ง)
     cleanupOtp(email);
 
     console.log(`User สมัครใหม่: ${email}`);
@@ -175,7 +190,6 @@ app.post('/api/register', async (req, res) => {
     return res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
   }
 });
-
 // ==================== นับจำนวนผู้ใช้ ====================
 app.get('/api/users/count', async (req, res) => {
   try {
