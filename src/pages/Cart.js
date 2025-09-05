@@ -51,9 +51,11 @@ export default function CartPage() {
               const price = Number(item.price) || 0;
               const qty = item.qty || 1;
               const lineTotal = price * qty;
+              const itemKey = `${String(item.id)}::${item.size ?? ''}`; // ✅ key ผูกกับ size
+
               return (
                 <li
-                  key={item.id}
+                  key={itemKey}
                   className="group bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-4 md:p-5 hover:shadow-md transition"
                 >
                   <div className="flex items-start gap-4 md:gap-5">
@@ -73,14 +75,17 @@ export default function CartPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="font-semibold truncate">{item.name}</p>
+                          <p className="font-semibold truncate">
+                            {item.name}{item.size ? ` • ${item.size}` : ''}
+                          </p>
                           <p className="text-sm text-neutral-500 mt-0.5">
                             {formatTHB(price)} / ชิ้น
                           </p>
                         </div>
 
                         <button
-                          onClick={() => removeFromCart(item.id)}
+                          type="button"
+                          onClick={() => removeFromCart(item.id, item.size)} // ✅ ส่ง size
                           className="text-red-600 hover:text-red-700 text-sm font-medium"
                           aria-label={`ลบ ${item.name} ออกจากตะกร้า`}
                         >
@@ -92,7 +97,8 @@ export default function CartPage() {
                       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden">
                           <button
-                            onClick={() => setQty(item.id, Math.max(1, qty - 1))}
+                            type="button" // ✅ กัน submit form
+                            onClick={() => setQty(item.id, item.size, Math.max(1, qty - 1))} // ✅ ส่ง size
                             className="px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
                             disabled={qty <= 1}
                             aria-label="ลดจำนวน"
@@ -100,18 +106,19 @@ export default function CartPage() {
                             −
                           </button>
                           <input
-                            className="w-12 text-center outline-none border-x border-neutral-200 dark:border-neutral-700 py-2 bg-white dark:bg-neutral-900"
+                            className="w-14 text-center outline-none border-x border-neutral-200 dark:border-neutral-700 py-2 bg-white dark:bg-neutral-900"
                             type="number"
                             min={1}
                             value={qty}
                             onChange={(e) => {
                               const v = Math.max(1, Number(e.target.value) || 1);
-                              setQty(item.id, v);
+                              setQty(item.id, item.size, v); // ✅ ส่ง size
                             }}
                             aria-label="จำนวน"
                           />
                           <button
-                            onClick={() => setQty(item.id, qty + 1)}
+                            type="button" // ✅ กัน submit form
+                            onClick={() => setQty(item.id, item.size, qty + 1)} // ✅ ส่ง size
                             className="px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800"
                             aria-label="เพิ่มจำนวน"
                           >
@@ -133,6 +140,7 @@ export default function CartPage() {
 
           <div className="mt-6 flex items-center justify-between">
             <button
+              type="button"
               onClick={clearCart}
               className="text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white underline underline-offset-2"
             >
@@ -181,6 +189,7 @@ export default function CartPage() {
             </div>
 
             <button
+              type="button"
               className="w-full mt-5 h-12 rounded-xl bg-neutral-900 text-white font-semibold hover:-translate-y-0.5 active:translate-y-0 transition"
               onClick={() => alert('ไปหน้าเช็คเอาท์ (ใส่ลิงก์/เนวิเกตตามระบบของคุณ)')}
             >
