@@ -47,8 +47,10 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
 });
 const upload = multer({ storage });
+// ====== Nodemailer (ใช้ POOL + อุ่นเครื่อง + คงท่อ) ======
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first'); // ลดดีเลย์ DNS/IPv6 บน Windows
 
-/* ====== Nodemailer (SSL 465 แบบเดิม แต่ปิด logger/debug) ====== */
 const MAIL_USER = process.env.MAIL_USER;
 const MAIL_PASS = process.env.MAIL_PASS;
 const MAIL_FROM = process.env.MAIL_FROM || MAIL_USER;
@@ -56,22 +58,30 @@ const MAIL_FROM = process.env.MAIL_FROM || MAIL_USER;
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 465,
-  secure: true,                     // SSL
+  secure: true,
+  pool: true,            // ✅ ใช้ connection pool
+  keepAlive: true,       // ✅ คงการเชื่อมต่อไว้เพื่อส่งไว
+  maxConnections: 3,
+  maxMessages: 200,
   auth: { user: MAIL_USER, pass: MAIL_PASS },
-  connectionTimeout: 15000,
-  greetingTimeout: 10000,
-  socketTimeout: 20000,
-  logger: false,                    // ปิด log SMTP
-  debug: false,                     // ปิด DEBUG SMTP
-  tls: { ciphers: 'TLSv1.2' },
+  logger: false,
+  debug: false,
+  connectionTimeout: 10000,
+  greetingTimeout: 7000,
+  socketTimeout: 15000,
+  tls: { rejectUnauthorized: true },
 });
 
-// อุ่นเครื่อง (บอกสั้น ๆ)
+// อุ่นเครื่อง (ไม่ปิดท่อ)
 (async () => {
-  try { await transporter.verify(); console.log('SMTP ready'); }
-  catch (e) { console.error('SMTP verify failed:', e.message); }
+  try {
+    await transporter.verify();
+    console.log('SMTP ready (pool warmed)');
+    setInterval(() => transporter.verify().catch(()=>{}), 5 * 60 * 1000); // กันหลับทุก 5 นาที
+  } catch (e) {
+    console.error('SMTP verify failed:', e.message);
+  }
 })();
-
 /* ====== OTP In-memory store ====== */
 const otpStore = {};
 const OTP_EXPIRE_MIN   = Number(process.env.OTP_EXPIRE_MIN || 10);
@@ -92,7 +102,7 @@ app.post('/api/profile/upload', upload.single('image'), (req, res) => {
   res.json({ url: `/uploads/${req.file.filename}` });
 });
 
-/* ====== ส่ง OTP (สมัครสมาชิก) ====== */
+/* ====== ส่ง OTP (สมัครสมาชิก) — ตอบทันที + ส่งหลังบ้าน ====== */
 app.post('/api/send-otp', async (req, res) => {
   const email = (req.body?.email ?? '').trim().toLowerCase();
   if (!email || !isValidEmail(email)) {
@@ -100,72 +110,83 @@ app.post('/api/send-otp', async (req, res) => {
   }
 
   try {
-    // 🔵 LOG #1: เริ่มกดส่ง
     console.log(`[OTP] request  ${email} at ${iso()}`);
 
-    // อีเมลซ้ำในระบบหรือยัง
+    // กันอีเมลซ้ำ
     const exists = await pool.query('SELECT 1 FROM users WHERE email=$1', [email]);
     if (exists.rowCount > 0) {
       return res.status(409).json({ message: 'อีเมลนี้ถูกใช้แล้ว กรุณาเข้าสู่ระบบหรือกดลืมรหัสผ่าน' });
     }
 
-    // คูลดาวน์เฉพาะ “เคยส่งสำเร็จ”
+    // คูลดาวน์ (เฉพาะส่งสำเร็จรอบก่อน)
     const rec = otpStore[email];
     if (rec && rec.delivered && rec.lastSentAt && (now() - rec.lastSentAt) < OTP_COOLDOWN_MS) {
       const leftMs = (rec.lastSentAt + OTP_COOLDOWN_MS) - now();
-      const leftMin = Math.ceil(leftMs / 60000);
       return res.status(429).json({
-        message: `ขอ OTP ได้อีกใน ${leftMin} นาที`,
-        cooldownSeconds: Math.ceil(leftMs / 1000),
+        message: `ขอ OTP ได้อีกใน ${Math.ceil(leftMs/60000)} นาที`,
+        cooldownSeconds: Math.ceil(leftMs/1000),
         nextAvailableAt: iso(now() + leftMs),
       });
     }
 
-    // ออกโค้ดใหม่ทุกครั้ง
+    // สร้าง/เก็บ OTP
     const code = genOtp();
     otpStore[email] = { code, expireAt: now() + OTP_EXPIRE_MS, delivered: false, lastSentAt: 0 };
 
-    // ส่งเมล (รอให้เสร็จ)
+    // ✅ ตอบกลับ "ทันที" เพื่อให้หน้าเว็บขึ้นแจ้งเตือนได้เลย
+    res.json({
+      ok: true,
+      showOtpInput: true,
+      // ข้อความนี้ให้ UI เอาไปโชว์เป็น toast/snackbar ได้ทันที
+      notice: 'กำลังส่งรหัสยืนยันไปที่อีเมลของคุณ… โปรดรอสักครู่',
+      cooldownSeconds: Math.ceil(OTP_COOLDOWN_MS / 1000),
+    });
+
+    // 🔥 ส่งอีเมลหลังบ้าน (HTML ตัวใหญ่ชัด)
+    const preheader = `รหัส OTP ของคุณคือ ${code} (หมดอายุใน ${OTP_EXPIRE_MIN} นาที)`;
     await transporter.sendMail({
-      from: MAIL_FROM, // ควรเป็นอีเมลเดียวกับ MAIL_USER
+      from: MAIL_FROM,
       to: email,
       subject: 'รหัสยืนยันการสมัครสมาชิก (OTP)',
-      text: `รหัส OTP ของคุณคือ ${code} (หมดอายุภายใน ${OTP_EXPIRE_MIN} นาที)`,
+      text: preheader, // fallback
       html: `
-        <div style="font-family:system-ui,Arial,sans-serif;font-size:16px;color:#222">
-          <p>รหัส OTP ของคุณคือ</p>
-          <div style="font-size:28px;font-weight:700;letter-spacing:2px">${code}</div>
-          <p>รหัสหมดอายุภายใน <strong>${OTP_EXPIRE_MIN} นาที</strong></p>
+        <!-- preheader (ซ่อนในบาง client) -->
+        <span style="display:none;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;">
+          ${preheader}
+        </span>
+        <div style="font-family:Arial, Helvetica, sans-serif; color:#222; line-height:1.6; padding:8px 2px;">
+          <h2 style="margin:0 0 8px 0; font-size:20px;">รหัส OTP ของคุณคือ</h2>
+          <div style="
+            font-size:36px;
+            font-weight:700;
+            letter-spacing:10px;
+            color:#000;
+            margin:12px 0 16px 0;
+          ">
+            ${code}
+          </div>
+          <p style="margin:0; font-size:14px; color:#555;">
+            รหัสหมดอายุภายใน <strong>${OTP_EXPIRE_MIN} นาที</strong>
+          </p>
         </div>
       `,
     });
 
-    // มาร์กส่งสำเร็จ + เริ่มคูลดาวน์
-    otpStore[email].delivered = true;
-    otpStore[email].lastSentAt = now();
+    // มาร์กส่งสำเร็จ
+    const t = now();
+    const r = otpStore[email];
+    if (r) { r.delivered = true; r.lastSentAt = t; }
+    console.log(`[OTP] delivered ${email} at ${iso(t)}`);
 
-    // 🟢 LOG #2: ส่งเข้าเมลแล้ว
-    console.log(`[OTP] delivered ${email} at ${iso(otpStore[email].lastSentAt)}`);
-
-    // ปิดคอนเนคชันทันที (สไตล์เดิม)
-    try { transporter.close(); } catch {}
-
-    // ตอบให้ UI ขึ้นช่องกรอก OTP ทันที + แจ้งคูลดาวน์ 60 นาที + แจ้งเตือน "ส่งไปที่เมลแล้ว รอสักครู่รับ"
-    return res.json({
-      message: 'ส่ง OTP ไปที่อีเมลแล้ว กรุณารอสักครู่และตรวจสอบกล่องจดหมาย/สแปม',
-      showOtpInput: true,
-      cooldownSeconds: Math.ceil(OTP_COOLDOWN_MS / 1000), // 3600
-      nextAvailableAt: iso(otpStore[email].lastSentAt + OTP_COOLDOWN_MS),
-      hint: 'กรุณากรอก OTP ที่ได้รับทางอีเมล',
-    });
+    // ❌ ห้าม close transporter (ต้องคงท่อไว้)
   } catch (err) {
     console.error('send-otp error:', err?.message || err);
-    if (email) cleanupOtp(email); // ไม่ให้คูลดาวน์หลอก
-    return res.status(500).json({ message: 'ระบบส่งอีเมลล่าช้า โปรดลองใหม่อีกครั้ง' });
+    if (email) cleanupOtp(email);
+    // ไม่คูลดาวน์ในกรณีส่งล้มเหลว เพื่อให้ขอใหม่ได้
   }
 });
 
-/* ====== (ออปชัน) ตรวจสถานะ OTP ====== */
+// เช็คสถานะ OTP (ให้ฝั่ง UI poll ถ้าต้องการเด้งแจ้งเตือนเมื่อส่งถึง)
 app.get('/api/otp-status', (req, res) => {
   const email = (req.query?.email ?? '').trim().toLowerCase();
   const rec = otpStore[email];
@@ -177,7 +198,6 @@ app.get('/api/otp-status', (req, res) => {
     ttlMs: remainingMs,
   });
 });
-
 
 // ====== สมัครสมาชิก (ตรวจ OTP) ======
 app.post('/api/register', async (req, res) => {

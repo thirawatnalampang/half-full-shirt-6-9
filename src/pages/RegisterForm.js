@@ -1,66 +1,92 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 export default function RegisterPage() {
-  const [form, setForm] = useState({
-    email: '',
-    password: '',
-  });
+  const [form, setForm] = useState({ email: '', password: '' });
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const navigate = useNavigate();
 
-  // ตรวจสอบรูปแบบอีเมล
-  const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  // เก็บ interval ไว้เพื่อเคลียร์
+  const pollRef = useRef(null);
 
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+  const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  // ✅ เริ่ม polling เช็คว่าจดหมายถึงหรือยัง
+  const startPollDelivered = (email) => {
+    // กันซ้ำ
+    if (pollRef.current) clearInterval(pollRef.current);
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const qs = new URLSearchParams({ email });
+        const res = await fetch(`/api/otp-status?${qs.toString()}`);
+        const data = await res.json();
+        if (data?.delivered) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+          alert('อีเมลถึงแล้ว เปิดกล่องจดหมาย Inbox ได้เลย');
+        }
+      } catch (e) {
+        // เงียบไว้ ไม่ต้องทำอะไร
+      }
+    }, 2000);
   };
+
+  // เคลียร์ interval ตอนออกจากหน้านี้
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   // 1) ส่ง OTP ไปที่อีเมล
   const sendOtp = async () => {
     if (!validateEmail(form.email)) {
-      alert("กรุณากรอกอีเมลให้ถูกต้อง");
+      alert('กรุณากรอกอีเมลให้ถูกต้อง');
       return;
     }
     try {
-      const res = await fetch("/api/send-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: form.email }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
-      alert("OTP ถูกส่งไปที่อีเมลแล้ว");
+
+      // แจ้งผู้ใช้ทันทีว่ากำลังส่ง
+      alert('กำลังส่ง OTP ไปที่อีเมลของคุณ… โปรดรอสักครู่');
       setOtpSent(true);
+
+      // ✅ เริ่มเฝ้าดูจนเมลถึงแล้วค่อย alert แจ้ง
+      startPollDelivered(form.email);
     } catch (err) {
-      alert("ส่ง OTP ไม่สำเร็จ: " + err.message);
+      alert('ส่ง OTP ไม่สำเร็จ: ' + err.message);
     }
   };
 
   // 2) สมัครสมาชิกพร้อม OTP
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     if (!form.email || !form.password || !otp) {
-      alert("กรุณากรอกข้อมูลให้ครบ");
+      alert('กรุณากรอกข้อมูลให้ครบ');
       return;
     }
-
     try {
-      const res = await fetch("/api/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, otp }),
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.message);
 
-      alert(data.message);
-      navigate("/login");
+      alert(data.message || 'สมัครสำเร็จ');
+      navigate('/login');
     } catch (err) {
-      alert("สมัครไม่สำเร็จ: " + err.message);
+      alert('สมัครไม่สำเร็จ: ' + err.message);
     }
   };
 
@@ -74,9 +100,7 @@ export default function RegisterPage() {
       {/* ฟอร์มด้านขวา */}
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
-          <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">
-            REGISTER
-          </h2>
+          <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">REGISTER</h2>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Email */}
@@ -140,7 +164,7 @@ export default function RegisterPage() {
           </form>
 
           <p className="text-center text-sm text-gray-600 mt-6">
-            มีบัญชีแล้ว?{" "}
+            มีบัญชีแล้ว?{' '}
             <Link to="/login" className="underline text-[#6b3e26] hover:text-[#8a553d]">
               เข้าสู่ระบบ
             </Link>
