@@ -188,13 +188,12 @@ export default function CartPage() {
               </div>
             </div>
 
-            <button
-              type="button"
-              className="w-full mt-5 h-12 rounded-xl bg-neutral-900 text-white font-semibold hover:-translate-y-0.5 active:translate-y-0 transition"
-              onClick={() => alert('ไปหน้าเช็คเอาท์ (ใส่ลิงก์/เนวิเกตตามระบบของคุณ)')}
-            >
-              ชำระเงิน
-            </button>
+            <Link
+  to="/checkout"
+  className="w-full mt-5 h-12 rounded-xl bg-neutral-900 text-white font-semibold hover:-translate-y-0.5 active:translate-y-0 transition grid place-items-center"
+>
+  ชำระเงิน
+</Link>
 
             <p className="mt-3 text-xs text-neutral-500">
               ดำเนินการชำระเงินเพื่อยืนยันคำสั่งซื้อของคุณ

@@ -100,25 +100,25 @@ export default function ProductDetail() {
           {product.description || "ไม่มีรายละเอียดสินค้า"}
         </p>
 
-        {/* เลือกขนาด */}
-        <div className="mb-6">
-          <h3 className="text-sm font-medium text-gray-600 mb-2">Size:</h3>
-          <div className="flex gap-2">
-            {["XS", "S", "M", "L", "XL"].map((s) => (
-              <button
-                key={s}
-                onClick={() => setSize(s)}
-                className={`px-4 py-2 border rounded-lg ${
-                  size === s
-                    ? "bg-black text-white"
-                    : "bg-white text-gray-700 hover:bg-gray-100"
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
+       {/* เลือกขนาด */}
+<div className="mb-6">
+  <h3 className="text-sm font-medium text-gray-600 mb-2">Size:</h3>
+  <div className="flex gap-2 flex-wrap">
+    {["XS", "S", "M", "L", "XL", "2XL", "3XL"].map((s) => (
+      <button
+        key={s}
+        onClick={() => setSize(s)}
+        className={`px-4 py-2 border rounded-lg ${
+          size === s
+            ? "bg-black text-white"
+            : "bg-white text-gray-700 hover:bg-gray-100"
+        }`}
+      >
+        {s}
+      </button>
+    ))}
+  </div>
+</div>
 
         {/* จำนวน */}
         <div className="mb-6">

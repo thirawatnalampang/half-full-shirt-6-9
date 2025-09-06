@@ -1,81 +1,197 @@
-import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+// src/components/Navbar.jsx
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { FaUserCircle, FaUsers } from 'react-icons/fa';
+import { FaUserCircle, FaUsers, FaHome, FaShoppingCart, FaListAlt, FaSearch, FaTimes } from 'react-icons/fa';
+
+const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:3000';
+
+// ทำ URL ให้ใช้ได้ ไม่ว่าจะเป็น full URL หรือแค่ path
+function ensureURL(u) {
+  if (!u) return '';
+  if (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:')) return u;
+  const path = u.startsWith('/') ? u : `/${u}`;
+  return `${API_BASE}${path}`;
+}
 
 export default function Navbar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const [showMobileSearch, setShowMobileSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [avatarSrc, setAvatarSrc] = useState('');
+
+  // ✅ ใช้รูปอัปโหลด (profile_image) ก่อน แล้วค่อย fallback ไป profile_image_url
+  // ✅ ใส่ cache-busting (?v=timestamp) ทุกครั้งที่ค่า source เปลี่ยน → รูปรีเฟรชทันที
+  useEffect(() => {
+    const raw =
+      user?.profile_image
+        ? ensureURL(user.profile_image)
+        : (user?.profile_image_url || '');
+
+    if (raw) {
+      const sep = raw.includes('?') ? '&' : '?';
+      setAvatarSrc(`${raw}${sep}v=${Date.now()}`);
+    } else {
+      setAvatarSrc('');
+    }
+  }, [user?.profile_image, user?.profile_image_url]);
+
+  useEffect(() => {
+    setShowMobileSearch(false);
+  }, [location.pathname]);
 
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
 
+  const handleSearch = () => {
+    const q = searchQuery.trim();
+    if (q) navigate(`/search?query=${encodeURIComponent(q)}`);
+  };
+
   return (
-    <nav className="bg-[#6b3e26] text-white py-4 px-6 shadow-md">
-      <div className="max-w-6xl mx-auto flex justify-between items-center">
-        {/* Logo / ชื่อร้าน */}
-        <h1
-          className="text-2xl font-bold tracking-wide cursor-pointer"
-          onClick={() => navigate('/')}
-        >
-          KP VINTAGE
-        </h1>
+    <>
+      {/* Desktop / Tablet ใหญ่ */}
+      <nav className="hidden md:block bg-[#6b3e26] text-white py-4 px-6 shadow-md">
+        <div className="max-w-6xl mx-auto flex justify-between items-center">
+          {/* Logo */}
+          <h1
+            className="text-2xl font-bold tracking-wide cursor-pointer"
+            onClick={() => navigate('/')}
+          >
+            KP VINTAGE
+          </h1>
 
-        {/* เมนูด้านขวา */}
-        <div className="flex items-center space-x-6 text-sm sm:text-base font-medium">
-          <Link to="/" className="hover:underline hover:text-yellow-200 transition">
-            หน้าแรก
-          </Link>
-          <Link to="/cart" className="hover:underline hover:text-yellow-200 transition">
-            ตะกร้า
-          </Link>
-
-          {/* แสดงเฉพาะเมื่อเป็นแอดมิน */}
-          {user?.role === 'admin' && (
-            <Link
-              to="/admin"
-              className="flex items-center space-x-2 hover:underline hover:text-yellow-200 transition"
-            >
-              <FaUsers size={18} />
-              <span>Admin</span>
+          {/* เมนูขวา */}
+          <div className="flex items-center space-x-6 text-sm sm:text-base font-medium">
+            <Link to="/" className="hover:underline hover:text-yellow-200 transition">
+              หน้าแรก
             </Link>
-          )}
+            <Link to="/cart" className="hover:underline hover:text-yellow-200 transition">
+              ตะกร้า
+            </Link>
+            <Link to="/orders" className="hover:underline hover:text-yellow-200 transition">
+              คำสั่งซื้อของฉัน
+            </Link>
 
-          {/* User / Login-Logout */}
-          {user ? (
-            <div className="flex items-center space-x-4">
+            {user?.role === 'admin' && (
               <Link
-                to="/profile"
+                to="/admin"
                 className="flex items-center space-x-2 hover:underline hover:text-yellow-200 transition"
               >
-                {user.profile_image ? (
-                  <img
-                    src={user.profile_image}
-                    alt="Profile"
-                    className="w-6 h-6 rounded-full object-cover"
-                  />
-                ) : (
-                  <FaUserCircle size={24} />
-                )}
-                <span>สวัสดี, {user.username}</span>
+                <FaUsers size={18} />
+                <span>Admin</span>
               </Link>
+            )}
 
+            {user ? (
+              <div className="flex items-center space-x-4">
+                <Link
+                  to="/profile"
+                  className="flex items-center space-x-2 hover:underline hover:text-yellow-200 transition"
+                >
+                  {avatarSrc ? (
+                    <img
+                      src={avatarSrc}
+                      alt="Profile"
+                      className="w-6 h-6 rounded-full object-cover border border-white/30"
+                    />
+                  ) : (
+                    <FaUserCircle size={24} />
+                  )}
+                  <span>สวัสดี, {user.username || user.email}</span>
+                </Link>
+                <button
+                  onClick={handleLogout}
+                  className="hover:underline hover:text-yellow-200 transition"
+                >
+                  ออกจากระบบ
+                </button>
+              </div>
+            ) : (
+              <Link to="/login" className="hover:underline hover:text-yellow-200 transition">
+                เข้าสู่ระบบ
+              </Link>
+            )}
+          </div>
+        </div>
+      </nav>
+
+      {/* Mobile / Tablet เล็ก */}
+      <nav className="md:hidden bg-[#6b3e26] text-white shadow-md sticky top-0 z-50">
+        <div className="h-14 px-4 flex justify-between items-center">
+          <h1
+            className="text-xl font-bold cursor-pointer"
+            onClick={() => navigate('/')}
+          >
+            KP VINTAGE
+          </h1>
+
+          {/* ปุ่มค้นหา */}
+          <button
+            onClick={() => setShowMobileSearch(v => !v)}
+            className="p-2 rounded hover:bg-white/10"
+          >
+            {showMobileSearch ? <FaTimes /> : <FaSearch />}
+          </button>
+        </div>
+
+        {/* กล่องค้นหา */}
+        <div
+          className={`overflow-hidden transition-[max-height] duration-300 ease-out ${
+            showMobileSearch ? 'max-h-20' : 'max-h-0'
+          }`}
+        >
+          <div className="px-4 pb-3">
+            <div className="flex bg-white rounded-xl px-3 py-2">
+              <input
+                type="text"
+                className="flex-1 bg-transparent text-black outline-none"
+                placeholder="ค้นหาสินค้า..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+              />
               <button
-                onClick={handleLogout}
-                className="hover:underline hover:text-yellow-200 transition"
+                onClick={handleSearch}
+                className="ml-2 px-3 py-1 bg-[#6b3e26] text-white rounded-lg"
               >
-                ออกจากระบบ
+                ค้นหา
               </button>
             </div>
-          ) : (
-            <Link to="/login" className="hover:underline hover:text-yellow-200 transition">
-              เข้าสู่ระบบ
-            </Link>
-          )}
+          </div>
+        </div>
+      </nav>
+
+      {/* Bottom Tab Bar */}
+      <div className="md:hidden fixed bottom-0 inset-x-0 bg-[#6b3e26] text-white z-50">
+        <div className="grid grid-cols-4">
+          <TabLink to="/" label="หน้าแรก" icon={<FaHome />} active={location.pathname === '/'} />
+          <TabLink to="/cart" label="ตะกร้า" icon={<FaShoppingCart />} active={location.pathname.startsWith('/cart')} />
+          <TabLink to="/orders" label="คำสั่งซื้อ" icon={<FaListAlt />} active={location.pathname.startsWith('/orders')} />
+          <TabLink to={user ? '/profile' : '/login'} label="ฉัน" icon={<FaUserCircle />} active={location.pathname.startsWith('/profile') || location.pathname.startsWith('/login')} />
         </div>
       </div>
-    </nav>
+
+      <div className="md:hidden h-14" /> {/* Spacer กันทับ content */}
+    </>
+  );
+}
+
+function TabLink({ to, icon, label, active }) {
+  return (
+    <Link
+      to={to}
+      className={`flex flex-col items-center justify-center py-2 text-xs ${
+        active ? 'text-yellow-200' : 'text-white'
+      }`}
+    >
+      <div className="text-lg">{icon}</div>
+      <span>{label}</span>
+    </Link>
   );
 }

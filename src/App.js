@@ -9,6 +9,10 @@ import LoginForm from './pages/LoginForm';
 import RegisterForm from './pages/RegisterForm';
 import ProfilePage from './pages/ProfilePage';
 import AdminPage from './pages/admin/AdminPage';
+import CheckoutPage from './pages/CheckoutPage';
+import OrderSuccess from './pages/OrderSuccess';
+import MyOrders from './pages/MyOrders';
+
 
 import './App.css';
 
@@ -28,6 +32,11 @@ function App() {
         <Route path="/register" element={<RegisterForm />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/admin" element={<AdminPage />} />
+        <Route path="/checkout" element={<CheckoutPage />} />
+  <Route path="/order-success" element={<OrderSuccess />} />
+  <Route path="/order-success/:orderId" element={<OrderSuccess />} />
+        <Route path="/orders" element={<MyOrders />} />
+
       </Routes>
       {/* ไม่มี <Cart /> ลอยล่างขวาแล้ว */}
     </>
