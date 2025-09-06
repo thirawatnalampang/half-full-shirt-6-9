@@ -87,8 +87,8 @@ const otpStore = {};
 const OTP_EXPIRE_MIN   = Number(process.env.OTP_EXPIRE_MIN || 10);
 const OTP_EXPIRE_MS    = OTP_EXPIRE_MIN * 60 * 1000;
 
-// ✅ คูลดาวน์ 60 นาทีตามที่ขอ
-const OTP_COOLDOWN_MS  = 60 * 60 * 1000;
+
+const OTP_COOLDOWN_MS  = 60 * 1000;
 
 const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim());
 const genOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
