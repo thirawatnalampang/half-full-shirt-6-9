@@ -850,6 +850,7 @@ function OrdersPanel() {
     </div>
   );
 }
+
 // ==== พาเล็ตและสไตล์กราฟ (โหมดมืดอ่านง่าย) ====
 const CHART = {
   text: "#EAEAEA",
@@ -867,6 +868,7 @@ function DashboardPanel() {
   const [salesByDay, setSalesByDay] = useState([]);
   const [topProducts, setTopProducts] = useState([]);
   const [byCategory, setByCategory] = useState([]);
+  const [recentOrders, setRecentOrders] = useState([]);   // ✅ เหลือเฉพาะออเดอร์ล่าสุด
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -877,6 +879,24 @@ function DashboardPanel() {
     new Intl.NumberFormat("th-TH", { notation: "compact", maximumFractionDigits: 1 }).format(Number(n || 0));
   const fmtDate = (d) => {
     try { return new Date(d).toLocaleDateString("th-TH", { month: "short", day: "numeric" }); }
+    catch { return d; }
+  };
+  const fmtTimeAgo = (date) => {
+    try {
+      const d = new Date(date);
+      const diff = Date.now() - d.getTime();
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return "เมื่อสักครู่";
+      if (mins < 60) return `${mins} นาทีที่แล้ว`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs} ชั่วโมงที่แล้ว`;
+      const days = Math.floor(hrs / 24);
+      if (days < 30) return `${days} วันก่อน`;
+      return d.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
+    } catch { return ""; }
+  };
+  const fmtDateTime = (d) => {
+    try { return new Date(d).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" }); }
     catch { return d; }
   };
 
@@ -896,6 +916,25 @@ function DashboardPanel() {
       category: x.category || x.category_name || x.name || "ไม่ระบุ",
       revenue: Number(x.revenue ?? x.total ?? x.amount ?? 0),
     }));
+  const normalizeOrders = (arr) =>
+    (Array.isArray(arr) ? arr : []).map(o => ({
+      order_id: o.order_id,
+      order_time: o.order_time,
+      status: o.status,
+      shipping_method: o.shipping_method || "",
+      buyer_name: o.buyer_name || "ลูกค้า",
+      email: o.email || "",
+      phone: o.phone || "",
+      order_total: Number(o.order_total || 0),
+      items: Array.isArray(o.items) ? o.items.map(it => ({
+        product_id: it.product_id,
+        product_name: it.product_name,
+        category_name: it.category_name || "ไม่ระบุ",
+        quantity: Number(it.quantity || 0),
+        unit_price: Number(it.unit_price || 0),
+        line_total: Number(it.line_total || 0),
+      })) : [],
+    }));
 
   // ===== Fetch =====
   useEffect(() => {
@@ -910,13 +949,17 @@ function DashboardPanel() {
         setLoading(true);
         setError("");
 
-        const [oRes, dRes, tRes, cRes] = await Promise.all([
+        const [oRes, dRes, tRes, cRes, roRes] = await Promise.all([
           fetch(`${API.metrics}/overview?${query}`),
           fetch(`${API.metrics}/sales-by-day?${query}`),
           fetch(`${API.metrics}/top-products?${query}`),
           fetch(`${API.metrics}/category-breakdown?${query}`),
+          fetch(`${API.metrics}/recent-orders?limit=10&${query}`), // ✅ เอาเฉพาะ recent-orders
         ]);
-        const [o, d, t, c] = await Promise.all([oRes.json(), dRes.json(), tRes.json(), cRes.json()]);
+        const [o, d, t, c, ro] = await Promise.all([
+          oRes.json(), dRes.json(), tRes.json(), cRes.json(),
+          roRes.ok ? roRes.json() : Promise.resolve([]),
+        ]);
         if (!oRes.ok || !dRes.ok || !tRes.ok || !cRes.ok) {
           throw new Error(`metrics error: ${oRes.status}/${dRes.status}/${tRes.status}/${cRes.status}`);
         }
@@ -929,6 +972,7 @@ function DashboardPanel() {
         setSalesByDay(normalizeSales(d));
         setTopProducts(normalizeTop(t));
         setByCategory(normalizeCat(c));
+        setRecentOrders(normalizeOrders(ro)); // ✅
       } catch (err) {
         console.error("metrics fetch error:", err);
         setError(err?.message || "โหลดข้อมูลล้มเหลว");
@@ -936,6 +980,7 @@ function DashboardPanel() {
         setSalesByDay([]);
         setTopProducts([]);
         setByCategory([]);
+        setRecentOrders([]);
       } finally {
         setLoading(false);
       }
@@ -1039,7 +1084,7 @@ function DashboardPanel() {
           </>
         ) : (
           <>
-            {/* Top products – Bar with label + สีอ่านง่าย */}
+            {/* Top products – Bar */}
             <Card>
               <div className="mb-2 font-semibold text-white">สินค้าขายดี (ตามจำนวนชิ้น)</div>
               <div className="relative" style={{ height: 280 }}>
@@ -1056,7 +1101,7 @@ function DashboardPanel() {
               </div>
             </Card>
 
-            {/* Category breakdown – Donut สีชัด + total center */}
+            {/* Category breakdown – Donut */}
             <Card>
               <div className="mb-2 font-semibold text-white">ยอดขายตามหมวดหมู่</div>
               <div className="relative" style={{ height: 280 }}>
@@ -1093,10 +1138,55 @@ function DashboardPanel() {
           </>
         )}
       </div>
+
+      {/* ✅ Recent orders – 10 ออเดอร์ล่าสุด */}
+      <Card>
+        <div className="mb-2 font-semibold text-white">ออเดอร์ล่าสุด</div>
+        <div className="relative">
+          {loading ? (
+            <div className="h-40"><Skeleton h={160} /></div>
+          ) : recentOrders.length === 0 ? (
+            <NoData>ยังไม่มีออเดอร์</NoData>
+          ) : (
+            <ul className="divide-y divide-neutral-800">
+              {recentOrders.map((o) => {
+                const first = o.items[0];
+                const more = Math.max((o.items?.length || 0) - 1, 0);
+                return (
+                  <li key={o.order_id} className="py-3 flex items-start gap-3">
+                    <div className="w-24 shrink-0">
+                      <div className="text-xs text-neutral-400">#{o.order_id}</div>
+                      <div className="text-[11px] text-neutral-500">{fmtTimeAgo(o.order_time)}</div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white font-medium truncate">
+                        {o.buyer_name} <span className="text-neutral-400">• {o.shipping_method || "ไม่ระบุการจัดส่ง"}</span>
+                      </div>
+                      {first ? (
+                        <div className="text-xs text-neutral-300 truncate">
+                          {first.product_name}
+                          <span className="text-neutral-500"> • {first.category_name}</span>
+                          <span className="text-neutral-500"> • x{first.quantity}</span>
+                          {more > 0 && <span className="ml-1 text-neutral-400">+{more} รายการ</span>}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-neutral-500">ไม่มีสินค้า</div>
+                      )}
+                    </div>
+                    <div className="text-right w-28 shrink-0">
+                      <div className="text-xs text-neutral-400">{fmtDateTime(o.order_time)}</div>
+                      <div className="text-sm text-white font-semibold">{fmtTHB(o.order_total)}</div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }
-
 
 function UsersPanel() { return <div className="p-6 text-neutral-300">TODO: ตารางผู้ใช้</div>; }
 

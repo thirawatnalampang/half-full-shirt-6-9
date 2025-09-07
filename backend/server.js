@@ -1135,6 +1135,79 @@ app.get('/api/admin/metrics/category-breakdown', async (req, res) => {
   }
 });
 
+// 5) RECENT ORDERS (10 ออเดอร์ล่าสุด + รายการสินค้า) — ใช้ p.price
+app.get('/api/admin/metrics/recent-orders', async (req, res) => {
+  try {
+    const [from, to] = range(req);
+    const limit = Math.min(parseInt(req.query.limit || '10', 10), 50);
+
+    const { rows } = await pool.query(
+      `
+      WITH o10 AS (
+        SELECT
+          o.id,
+          o.user_id,
+          COALESCE(o.paid_at, o.created_at) AS order_time,   -- ตัด updated_at ออกเพื่อกันพัง
+          o.status,
+          COALESCE(o.shipping_method, '') AS shipping_method
+        FROM orders o
+        WHERE o.status IN ${PAID_STATUSES}
+          AND o.created_at::date BETWEEN $1::date AND $2::date
+        ORDER BY order_time DESC NULLS LAST
+        LIMIT $3
+      ),
+      items AS (
+        SELECT
+          oi.order_id,
+          oi.product_id,
+          p.name AS product_name,
+          c.name AS category_name,
+          oi.quantity,
+          COALESCE(p.price, 0)::numeric AS unit_price,        -- ✅ ใช้ราคาจาก products
+          (oi.quantity * COALESCE(p.price, 0))::numeric AS line_total
+        FROM order_items oi
+        JOIN products p     ON p.id = oi.product_id
+   LEFT JOIN categories c   ON c.id = p.category_id
+        WHERE oi.order_id IN (SELECT id FROM o10)
+      )
+      SELECT
+        o.id AS order_id,
+        o.order_time,
+        o.status,
+        o.shipping_method,
+        u.id AS user_id,
+        COALESCE(u.username, SPLIT_PART(u.email, '@', 1), 'ลูกค้า') AS buyer_name,
+        u.email,
+        u.phone,
+        (
+          SELECT COALESCE(json_agg(
+            json_build_object(
+              'product_id',   i.product_id,
+              'product_name', i.product_name,
+              'category_name',COALESCE(i.category_name, 'ไม่ระบุ'),
+              'quantity',     i.quantity,
+              'unit_price',   i.unit_price,
+              'line_total',   i.line_total
+            )
+            ORDER BY i.product_name
+          ), '[]'::json)
+          FROM items i WHERE i.order_id = o.id
+        ) AS items,
+        (SELECT SUM(i.line_total) FROM items i WHERE i.order_id = o.id)::numeric AS order_total
+      FROM o10 o
+      JOIN users u ON u.id = o.user_id
+      ORDER BY o.order_time DESC NULLS LAST
+      `,
+      [from, to, limit]
+    );
+
+    res.json(rows);
+  } catch (e) {
+    console.error('metrics/recent-orders error:', e);
+    res.status(500).json({ message: 'Server error: recent-orders' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);
 });
