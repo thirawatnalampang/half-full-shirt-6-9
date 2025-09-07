@@ -102,6 +102,8 @@ app.post('/api/profile/upload', upload.single('image'), (req, res) => {
   res.json({ url: `/uploads/${req.file.filename}` });
 });
 
+
+
 /* ====== ส่ง OTP (สมัครสมาชิก) — ตอบทันที + ส่งหลังบ้าน ====== */
 app.post('/api/send-otp', async (req, res) => {
   const email = (req.body?.email ?? '').trim().toLowerCase();
@@ -119,15 +121,17 @@ app.post('/api/send-otp', async (req, res) => {
     }
 
     // คูลดาวน์ (เฉพาะส่งสำเร็จรอบก่อน)
-    const rec = otpStore[email];
-    if (rec && rec.delivered && rec.lastSentAt && (now() - rec.lastSentAt) < OTP_COOLDOWN_MS) {
-      const leftMs = (rec.lastSentAt + OTP_COOLDOWN_MS) - now();
-      return res.status(429).json({
-        message: `ขอ OTP ได้อีกใน ${Math.ceil(leftMs/60000)} นาที`,
-        cooldownSeconds: Math.ceil(leftMs/1000),
-        nextAvailableAt: iso(now() + leftMs),
-      });
-    }
+const rec = otpStore[email];
+if (rec && rec.delivered && rec.lastSentAt && (now() - rec.lastSentAt) < OTP_COOLDOWN_MS) {
+  const leftMs = (rec.lastSentAt + OTP_COOLDOWN_MS) - now();
+  const leftSeconds = Math.ceil(leftMs / 1000); // ✅ ใช้วินาทีแทน
+
+  return res.status(429).json({
+    message: `ขอ OTP ได้อีกใน ${leftSeconds} วินาที`,
+    cooldownSeconds: leftSeconds,
+    nextAvailableAt: iso(now() + leftMs),
+  });
+}
 
     // สร้าง/เก็บ OTP
     const code = genOtp();
@@ -995,6 +999,142 @@ app.patch('/api/orders/:id/cancel', async (req, res) => {
     client.release();
   }
 });
+// === ช่วยอ่านช่วงวัน ===
+function range(req) {
+  const from = req.query.from || '2000-01-01';
+  const to   = req.query.to   || '2999-12-31';
+  return [from, to];
+}
+
+// นับยอดเฉพาะออเดอร์ที่ถือว่าเสร็จ/คิดเงินแล้ว
+const PAID_STATUSES = `('paid','shipped','done')`;
+
+// ใช้ยอดต่อบรรทัดแบบปลอดภัย: line_total ถ้ามีใช้เลย ไม่มีก็ quantity*price_per_unit
+const LINE_EXPR = `COALESCE(oi.line_total, oi.quantity * oi.price_per_unit)`;
+
+/* ============ ADMIN METRICS ============ */
+
+// 1) OVERVIEW
+// GET /api/admin/metrics/overview
+app.get('/api/admin/metrics/overview', async (req, res) => {
+  try {
+    const [from, to] = range(req);
+
+    const [{ rows: r1 }, { rows: r2 }, { rows: r3 }] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(SUM(${LINE_EXPR}),0) AS total_revenue
+           FROM orders o
+           JOIN order_items oi ON oi.order_id = o.id
+          WHERE o.status IN ${PAID_STATUSES}
+            AND o.created_at::date BETWEEN $1::date AND $2::date`,
+        [from, to]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS orders_count
+           FROM orders o
+          WHERE o.status IN ${PAID_STATUSES}
+            AND o.created_at::date BETWEEN $1::date AND $2::date`,
+        [from, to]
+      ),
+      pool.query(
+        `SELECT COUNT(DISTINCT o.user_id)::int AS customers
+           FROM orders o
+          WHERE o.status IN ${PAID_STATUSES}
+            AND o.created_at::date BETWEEN $1::date AND $2::date`,
+        [from, to]
+      ),
+    ]);
+
+    res.json({
+      total_revenue: Number(r1[0]?.total_revenue || 0),
+      orders_count : Number(r2[0]?.orders_count  || 0),
+      customers    : Number(r3[0]?.customers     || 0),
+    });
+  } catch (e) {
+    console.error('metrics/overview error:', e);
+    res.status(500).json({ message: 'Server error: overview' });
+  }
+});
+
+// 2) SALES BY DAY
+// GET /api/admin/metrics/sales-by-day
+app.get('/api/admin/metrics/sales-by-day', async (req, res) => {
+  try {
+    const [from, to] = range(req);
+    const { rows } = await pool.query(
+      `SELECT o.created_at::date AS day,
+              SUM(${LINE_EXPR})   AS revenue
+         FROM orders o
+         JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.status IN ${PAID_STATUSES}
+          AND o.created_at::date BETWEEN $1::date AND $2::date
+        GROUP BY o.created_at::date
+        ORDER BY day`,
+      [from, to]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('metrics/sales-by-day error:', e);
+    res.status(500).json({ message: 'Server error: sales-by-day' });
+  }
+});
+
+// 3) TOP PRODUCTS
+// GET /api/admin/metrics/top-products?limit=5
+app.get('/api/admin/metrics/top-products', async (req, res) => {
+  try {
+    const [from, to] = range(req);
+    const limit = Math.min(parseInt(req.query.limit || '5', 10), 50);
+
+    const { rows } = await pool.query(
+      `SELECT p.id, p.name,
+              SUM(oi.quantity)::int                 AS qty_sold,
+              SUM(${LINE_EXPR})                     AS revenue
+         FROM orders o
+         JOIN order_items oi ON oi.order_id = o.id
+         JOIN products     p ON p.id = oi.product_id
+        WHERE o.status IN ${PAID_STATUSES}
+          AND o.created_at::date BETWEEN $1::date AND $2::date
+        GROUP BY p.id, p.name
+        ORDER BY qty_sold DESC
+        LIMIT $3`,
+      [from, to, limit]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('metrics/top-products error:', e);
+    res.status(500).json({ message: 'Server error: top-products' });
+  }
+});
+// GET /api/admin/metrics/category-breakdown
+app.get('/api/admin/metrics/category-breakdown', async (req, res) => {
+  try {
+    const [from, to] = range(req);
+    const { rows } = await pool.query(
+      `SELECT
+          COALESCE(c.id, 0)                 AS category_id,
+          COALESCE(c.name, 'Uncategorized') AS category,
+          SUM(oi.quantity)                   AS qty_sold,
+          SUM(${LINE_EXPR})                  AS revenue
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.id
+       JOIN products     p ON p.id = oi.product_id
+  LEFT JOIN categories   c ON c.id = p.category_id
+      WHERE o.status IN ${PAID_STATUSES}
+        AND o.created_at::date BETWEEN $1::date AND $2::date
+      GROUP BY
+        COALESCE(c.id, 0),
+        COALESCE(c.name, 'Uncategorized')
+      ORDER BY revenue DESC`,
+      [from, to]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('metrics/category-breakdown error:', e);
+    res.status(500).json({ message: 'Server error: category-breakdown' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);
 });

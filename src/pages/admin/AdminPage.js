@@ -3,12 +3,17 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import {
   FaTshirt, FaTags, FaShoppingBag, FaUsers,
-  FaPlus, FaSearch, FaEdit, FaTrash, FaSave, FaTimes, FaHome
+  FaPlus, FaSearch, FaEdit, FaTrash, FaSave, FaTimes, FaHome,
+  FaChartLine
 } from "react-icons/fa";
-
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
+  BarChart, Bar, PieChart, Pie, Cell, Legend,
+} from "recharts";
 const API = {
   products: "http://localhost:3000/api/admin/products",
   categories: "http://localhost:3000/api/admin/categories",
+  metrics: "http://localhost:3000/api/admin/metrics",
 };
 
 function classNames(...arr) { return arr.filter(Boolean).join(" "); }
@@ -37,6 +42,7 @@ const menu = [
   { key: "categories", label: "หมวดหมู่", icon: <FaTags /> },
   { key: "orders", label: "ออเดอร์", icon: <FaShoppingBag /> },
   { key: "users", label: "ผู้ใช้", icon: <FaUsers /> },
+  { key: "dashboard", label: "แดชบอร์ด", icon: <FaChartLine /> },
 ];
 
 function Sidebar({ active, onChange }) {
@@ -844,8 +850,252 @@ function OrdersPanel() {
     </div>
   );
 }
+// ==== พาเล็ตและสไตล์กราฟ (โหมดมืดอ่านง่าย) ====
+const CHART = {
+  text: "#EAEAEA",
+  subtext: "#B3B3B3",
+  grid: "#3A3A3A",
+  line: "#7DD3FC", // ฟ้า (เส้น line)
+  bar:  "#A78BFA", // ม่วง (แท่ง)
+  pie:  ["#60A5FA","#34D399","#FBBF24","#F472B6","#F87171","#22D3EE","#C084FC","#4ADE80"],
+};
+const axisTick = { fill: CHART.subtext, fontSize: 12 };
+const gridStyle = { stroke: CHART.grid, strokeDasharray: "3 3" };
 
+function DashboardPanel() {
+  const [overview, setOverview] = useState({ total_revenue: 0, orders_count: 0, customers: 0 });
+  const [salesByDay, setSalesByDay] = useState([]);
+  const [topProducts, setTopProducts] = useState([]);
+  const [byCategory, setByCategory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
+  // ===== Formatters =====
+  const fmtTHB = (n) =>
+    new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(Number(n || 0));
+  const fmtCompact = (n) =>
+    new Intl.NumberFormat("th-TH", { notation: "compact", maximumFractionDigits: 1 }).format(Number(n || 0));
+  const fmtDate = (d) => {
+    try { return new Date(d).toLocaleDateString("th-TH", { month: "short", day: "numeric" }); }
+    catch { return d; }
+  };
+
+  // ===== Normalizers =====
+  const normalizeSales = (arr) =>
+    (Array.isArray(arr) ? arr : []).map((x, i) => ({
+      day: x.day || x.date || x.created_at || `#${i + 1}`,
+      revenue: Number(x.revenue ?? x.total ?? x.amount ?? x.sum ?? 0),
+    }));
+  const normalizeTop = (arr) =>
+    (Array.isArray(arr) ? arr : []).map((x) => ({
+      name: x.name || x.product_name || x.title || `#${x.product_id ?? x.id ?? "-"}`,
+      qty_sold: Number(x.qty_sold ?? x.quantity ?? x.qty ?? 0),
+    }));
+  const normalizeCat = (arr) =>
+    (Array.isArray(arr) ? arr : []).map((x) => ({
+      category: x.category || x.category_name || x.name || "ไม่ระบุ",
+      revenue: Number(x.revenue ?? x.total ?? x.amount ?? 0),
+    }));
+
+  // ===== Fetch =====
+  useEffect(() => {
+    const query = new URLSearchParams({
+      from: `${new Date().getFullYear()}-01-01`,
+      to: "2999-12-31",
+      limit: "5",
+    }).toString();
+
+    (async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const [oRes, dRes, tRes, cRes] = await Promise.all([
+          fetch(`${API.metrics}/overview?${query}`),
+          fetch(`${API.metrics}/sales-by-day?${query}`),
+          fetch(`${API.metrics}/top-products?${query}`),
+          fetch(`${API.metrics}/category-breakdown?${query}`),
+        ]);
+        const [o, d, t, c] = await Promise.all([oRes.json(), dRes.json(), tRes.json(), cRes.json()]);
+        if (!oRes.ok || !dRes.ok || !tRes.ok || !cRes.ok) {
+          throw new Error(`metrics error: ${oRes.status}/${dRes.status}/${tRes.status}/${cRes.status}`);
+        }
+
+        setOverview({
+          total_revenue: Number(o?.total_revenue ?? o?.total ?? 0),
+          orders_count: Number(o?.orders_count ?? o?.orders ?? 0),
+          customers: Number(o?.customers ?? o?.unique_customers ?? 0),
+        });
+        setSalesByDay(normalizeSales(d));
+        setTopProducts(normalizeTop(t));
+        setByCategory(normalizeCat(c));
+      } catch (err) {
+        console.error("metrics fetch error:", err);
+        setError(err?.message || "โหลดข้อมูลล้มเหลว");
+        setOverview({ total_revenue: 0, orders_count: 0, customers: 0 });
+        setSalesByDay([]);
+        setTopProducts([]);
+        setByCategory([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  // ===== Reusable UI =====
+  const Card = ({ children }) => (
+    <div className="p-4 rounded-2xl shadow bg-neutral-900 border border-neutral-800">{children}</div>
+  );
+  const KPI = ({ title, value, icon }) => (
+    <Card>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-neutral-400 text-xs">{title}</div>
+          <div className="mt-1 text-2xl font-semibold text-white">{value}</div>
+        </div>
+        <div className="p-2 rounded-xl bg-neutral-800 text-neutral-200">{icon}</div>
+      </div>
+    </Card>
+  );
+  const Skeleton = ({ h = 180 }) => (
+    <div className="relative overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
+      <div className="h-9 border-b border-neutral-800 px-4 flex items-center font-semibold text-white/0">.</div>
+      <div className="p-4" style={{ height: h }}>
+        <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+      </div>
+    </div>
+  );
+  const NoData = ({ children = "ไม่มีข้อมูล" }) => (
+    <div className="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">{children}</div>
+  );
+
+  // ===== Custom tooltips =====
+  const LineTT = ({ active, payload, label }) =>
+    active && payload?.length ? (
+      <div className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+        <div className="font-medium">{fmtDate(label)}</div>
+        <div className="text-neutral-300">{fmtTHB(payload[0].value)}</div>
+      </div>
+    ) : null;
+  const BarTT = ({ active, payload, label }) =>
+    active && payload?.length ? (
+      <div className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+        <div className="font-medium">{label}</div>
+        <div className="text-neutral-300">ขายได้ {payload[0].value} ชิ้น</div>
+      </div>
+    ) : null;
+  const PieTT = ({ active, payload }) =>
+    active && payload?.length ? (
+      <div className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+        <div className="font-medium">{payload[0].name}</div>
+        <div className="text-neutral-300">{fmtTHB(payload[0].value)}</div>
+      </div>
+    ) : null;
+
+  const totalCatRevenue = byCategory.reduce((a, b) => a + (b.revenue || 0), 0);
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* KPI cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <KPI title="ยอดขายรวม" value={fmtTHB(overview.total_revenue)} icon={<FaChartLine />} />
+        <KPI title="จำนวนออเดอร์" value={fmtCompact(overview.orders_count)} icon={<FaShoppingBag />} />
+        <KPI title="ลูกค้าที่สั่งซื้อ" value={fmtCompact(overview.customers)} icon={<FaUsers />} />
+      </div>
+
+      {error && (
+        <div className="p-3 rounded-xl border border-rose-700 bg-rose-950/40 text-rose-300 text-sm">
+          โหลดข้อมูลไม่สำเร็จ: {error}
+        </div>
+      )}
+
+      {/* Sales by day (Line) */}
+      {loading ? (
+        <Skeleton h={280} />
+      ) : (
+        <Card>
+          <div className="mb-2 font-semibold text-white">ยอดขายรายวัน</div>
+          <div className="relative" style={{ height: 280 }}>
+            {salesByDay.length === 0 && <NoData />}
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={salesByDay} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <CartesianGrid {...gridStyle} />
+                <XAxis dataKey="day" tickFormatter={fmtDate} tick={axisTick} />
+                <YAxis tickFormatter={(v) => fmtCompact(v)} tick={axisTick} />
+                <Tooltip content={<LineTT />} />
+                <Line type="monotone" dataKey="revenue" stroke={CHART.line} strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Top products + Category breakdown */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {loading ? (
+          <>
+            <Skeleton h={280} />
+            <Skeleton h={280} />
+          </>
+        ) : (
+          <>
+            {/* Top products – Bar with label + สีอ่านง่าย */}
+            <Card>
+              <div className="mb-2 font-semibold text-white">สินค้าขายดี (ตามจำนวนชิ้น)</div>
+              <div className="relative" style={{ height: 280 }}>
+                {topProducts.length === 0 && <NoData />}
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topProducts} margin={{ top: 10, right: 20, left: -10, bottom: 30 }}>
+                    <CartesianGrid {...gridStyle} />
+                    <XAxis dataKey="name" interval={0} angle={-20} textAnchor="end" height={60} tick={axisTick} />
+                    <YAxis allowDecimals={false} tick={axisTick} />
+                    <Tooltip content={<BarTT />} />
+                    <Bar dataKey="qty_sold" fill={CHART.bar} radius={[8, 8, 0, 0]} label={{ position: "top", fill: "#FFFFFF", fontSize: 12 }} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+
+            {/* Category breakdown – Donut สีชัด + total center */}
+            <Card>
+              <div className="mb-2 font-semibold text-white">ยอดขายตามหมวดหมู่</div>
+              <div className="relative" style={{ height: 280 }}>
+                {byCategory.length === 0 && <NoData />}
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={byCategory}
+                      dataKey="revenue"
+                      nameKey="category"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={110}
+                      labelLine={false}
+                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    >
+                      {byCategory.map((_, i) => (
+                        <Cell key={i} fill={CHART.pie[i % CHART.pie.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<PieTT />} />
+                    <Legend wrapperStyle={{ color: CHART.text }} />
+                  </PieChart>
+                </ResponsiveContainer>
+
+                {/* center total */}
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                  <div className="text-xs" style={{ color: CHART.subtext }}>รวม</div>
+                  <div className="text-sm font-semibold" style={{ color: CHART.text }}>{fmtTHB(totalCatRevenue)}</div>
+                </div>
+              </div>
+            </Card>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 
 function UsersPanel() { return <div className="p-6 text-neutral-300">TODO: ตารางผู้ใช้</div>; }
@@ -853,7 +1103,7 @@ function UsersPanel() { return <div className="p-6 text-neutral-300">TODO: ต�
 export default function AdminPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [active, setActive] = useState("products");
+  const [active, setActive] = useState("dashboard");
 
   useEffect(() => {
     if (!user || user.role !== "admin") {
@@ -871,6 +1121,7 @@ export default function AdminPage() {
           {active === "categories" && <CategoriesPanel />}
           {active === "orders" && <OrdersPanel />}
           {active === "users" && <UsersPanel />}
+          {active === "dashboard" && <DashboardPanel />}
         </main>
       </div>
     </div>

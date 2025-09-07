@@ -1,4 +1,3 @@
-// src/pages/CartPage.jsx
 import React, { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
@@ -6,15 +5,15 @@ import { useCart } from '../context/CartContext';
 const formatTHB = (n) =>
   new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Number(n || 0));
 
-const SHIPPING_THRESHOLD = 1000; // ส่งฟรีเมื่อยอดถึง
+const SHIPPING_THRESHOLD = 1000;
 const SHIPPING_FEE = 50;
 
 export default function CartPage() {
-  const { cart, removeFromCart, setQty, clearCart } = useCart();
+  const { cart, removeFromCart, setQty, increaseQty, decreaseQty, clearCart } = useCart();
 
   const { subtotal, totalQty, shipping, total } = useMemo(() => {
-    const subtotal = cart.reduce((sum, i) => sum + (Number(i.price) || 0) * (i.qty || 1), 0);
-    const totalQty = cart.reduce((s, i) => s + (i.qty || 0), 0);
+    const subtotal = cart.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
+    const totalQty = cart.reduce((s, i) => s + (Number(i.qty) || 0), 0);
     const shipping = subtotal === 0 || subtotal >= SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE;
     const total = subtotal + shipping;
     return { subtotal, totalQty, shipping, total };
@@ -49,9 +48,11 @@ export default function CartPage() {
           <ul className="space-y-4">
             {cart.map((item) => {
               const price = Number(item.price) || 0;
-              const qty = item.qty || 1;
+              const qty = Number(item.qty) || 1;
+              const max = Number.isFinite(item.maxStock) ? Number(item.maxStock) : undefined;
               const lineTotal = price * qty;
-              const itemKey = `${String(item.id)}::${item.size ?? ''}`; // ✅ key ผูกกับ size
+              const atLimit = Number.isFinite(max) && qty >= max;
+              const itemKey = `${String(item.id)}::${item.size ?? ''}`;
 
               return (
                 <li
@@ -61,12 +62,7 @@ export default function CartPage() {
                   <div className="flex items-start gap-4 md:gap-5">
                     <div className="relative w-20 h-20 md:w-24 md:h-24 shrink-0 overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-800">
                       {item.image ? (
-                        <img
-                          src={item.image}
-                          alt={item.name}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                        />
+                        <img src={item.image} alt={item.name} className="w-full h-full object-cover" loading="lazy" />
                       ) : (
                         <div className="w-full h-full grid place-items-center text-neutral-400">IMG</div>
                       )}
@@ -85,7 +81,7 @@ export default function CartPage() {
 
                         <button
                           type="button"
-                          onClick={() => removeFromCart(item.id, item.size)} // ✅ ส่ง size
+                          onClick={() => removeFromCart(item.id, item.size)}
                           className="text-red-600 hover:text-red-700 text-sm font-medium"
                           aria-label={`ลบ ${item.name} ออกจากตะกร้า`}
                         >
@@ -97,30 +93,35 @@ export default function CartPage() {
                       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden">
                           <button
-                            type="button" // ✅ กัน submit form
-                            onClick={() => setQty(item.id, item.size, Math.max(1, qty - 1))} // ✅ ส่ง size
+                            type="button"
+                            onClick={() => decreaseQty(item.id, item.size, 1)}
                             className="px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
                             disabled={qty <= 1}
                             aria-label="ลดจำนวน"
                           >
                             −
                           </button>
+
                           <input
-                            className="w-14 text-center outline-none border-x border-neutral-200 dark:border-neutral-700 py-2 bg-white dark:bg-neutral-900"
+                            className="w-16 text-center outline-none border-x border-neutral-200 dark:border-neutral-700 py-2 bg-white dark:bg-neutral-900"
                             type="number"
                             min={1}
+                            max={max ?? undefined}
                             value={qty}
                             onChange={(e) => {
                               const v = Math.max(1, Number(e.target.value) || 1);
-                              setQty(item.id, item.size, v); // ✅ ส่ง size
+                              setQty(item.id, item.size, v);
                             }}
                             aria-label="จำนวน"
                           />
+
                           <button
-                            type="button" // ✅ กัน submit form
-                            onClick={() => setQty(item.id, item.size, qty + 1)} // ✅ ส่ง size
-                            className="px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                            type="button"
+                            onClick={() => increaseQty(item.id, item.size, 1)}
+                            className="px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
                             aria-label="เพิ่มจำนวน"
+                            disabled={atLimit}
+                            title={atLimit ? 'ครบลิมิตสต็อกแล้ว' : undefined}
                           >
                             +
                           </button>
@@ -129,6 +130,12 @@ export default function CartPage() {
                         <div className="text-right">
                           <div className="text-sm text-neutral-500">รวม</div>
                           <div className="text-lg font-bold">{formatTHB(lineTotal)}</div>
+                          {atLimit && (
+                            <div className="text-xs text-amber-600 mt-1">
+                              ครบลิมิตสต็อกแล้ว
+                              {Number.isFinite(max) ? ` (${max} ชิ้น)` : ''}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -189,11 +196,11 @@ export default function CartPage() {
             </div>
 
             <Link
-  to="/checkout"
-  className="w-full mt-5 h-12 rounded-xl bg-neutral-900 text-white font-semibold hover:-translate-y-0.5 active:translate-y-0 transition grid place-items-center"
->
-  ชำระเงิน
-</Link>
+              to="/checkout"
+              className="w-full mt-5 h-12 rounded-xl bg-neutral-900 text-white font-semibold hover:-translate-y-0.5 active:translate-y-0 transition grid place-items-center"
+            >
+              ชำระเงิน
+            </Link>
 
             <p className="mt-3 text-xs text-neutral-500">
               ดำเนินการชำระเงินเพื่อยืนยันคำสั่งซื้อของคุณ
