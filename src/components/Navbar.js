@@ -21,6 +21,7 @@ export default function Navbar() {
   const location = useLocation();
 
   const [showMobileSearch, setShowMobileSearch] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [avatarSrc, setAvatarSrc] = useState('');
 
@@ -43,9 +44,10 @@ export default function Navbar() {
     } else setAvatarSrc('');
   }, [user?.profile_image, user?.profile_image_url]);
 
-  // ปิด search บนมือถือเมื่อเปลี่ยนหน้า
+  // ปิด search/เมนูผู้ใช้ เมื่อเปลี่ยนหน้า
   useEffect(() => {
     setShowMobileSearch(false);
+    setShowUserMenu(false);
   }, [location.pathname]);
 
   // ถ้า logout ให้รีเซ็ตช่องค้นหา
@@ -97,10 +99,7 @@ export default function Navbar() {
                 </button>
               </div>
             ) : (
-              <>
-                {/* spacer ความสูงเท่ากล่องค้นหา */}
-                <div className="h-10" />
-              </>
+              <div className="h-10">{/* spacer */}</div>
             )}
           </div>
 
@@ -139,23 +138,82 @@ export default function Navbar() {
 
       {/* Mobile / Tablet เล็ก */}
       <nav className="md:hidden bg-[#6b3e26] text-white shadow-md sticky top-0 z-50">
-        <div className="h-14 px-4 flex justify-between items-center">
+        <div className="h-14 px-4 flex justify-between items-center relative">
           <h1 className="text-xl font-bold cursor-pointer" onClick={() => navigate('/')}>
             KP VINTAGE
           </h1>
 
-          {showSearchUI ? (
-            <button
-              onClick={() => setShowMobileSearch(v => !v)}
-              className="p-2 rounded hover:bg-white/10"
-            >
-              {showMobileSearch ? <FaTimes /> : <FaSearch />}
-            </button>
-          ) : (
-            <>
-              {/* spacer ขนาดปุ่ม */}
+          <div className="flex items-center gap-2">
+            {showSearchUI ? (
+              <button
+                onClick={() => setShowMobileSearch(v => !v)}
+                className="p-2 rounded hover:bg-white/10"
+                aria-label="Toggle search"
+              >
+                {showMobileSearch ? <FaTimes /> : <FaSearch />}
+              </button>
+            ) : (
               <div className="w-9 h-9" />
-            </>
+            )}
+
+            {/* ปุ่มเมนูผู้ใช้ */}
+            {user ? (
+              <button
+                onClick={() => setShowUserMenu(v => !v)}
+                className="p-1 rounded-full hover:bg-white/10"
+                aria-label="User menu"
+              >
+                {avatarSrc ? (
+                  <img
+                    src={avatarSrc}
+                    alt="Me"
+                    className="w-8 h-8 rounded-full object-cover border border-white/30"
+                  />
+                ) : (
+                  <FaUserCircle className="text-2xl" />
+                )}
+              </button>
+            ) : (
+              <Link
+                to="/login"
+                className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20"
+              >
+                เข้าสู่ระบบ
+              </Link>
+            )}
+          </div>
+
+          {/* เมนูดรอปดาวน์ผู้ใช้ */}
+          {user && showUserMenu && (
+            <div className="absolute right-3 top-14 w-44 bg-white text-black rounded-xl shadow-lg overflow-hidden">
+              <Link
+                to="/profile"
+                className="block px-4 py-3 hover:bg-black/5"
+                onClick={() => setShowUserMenu(false)}
+              >
+                โปรไฟล์ของฉัน
+              </Link>
+
+              {user.role === 'admin' && (
+                <Link
+                  to="/admin"
+                  className="block px-4 py-3 hover:bg-black/5"
+                  onClick={() => setShowUserMenu(false)}
+                >
+                  Admin
+                </Link>
+              )}
+
+              <button
+                className="w-full text-left px-4 py-3 hover:bg黑/5 hover:bg-black/5"
+                onClick={() => {
+                  setShowUserMenu(false);
+                  handleLogout();
+                }}
+              >
+                ออกจากระบบ
+              </button>
+            </div>
           )}
         </div>
 

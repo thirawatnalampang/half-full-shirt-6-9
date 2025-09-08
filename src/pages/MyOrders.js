@@ -12,45 +12,33 @@ const CURRENCY = (n) =>
 const STATUS_CONFIG = {
   pending: {
     label: "รอดำเนินการ",
-    activeClass:
-      "bg-gray-700 text-white border-gray-700 hover:bg-gray-800",
-    badgeClass:
-      "bg-gray-700 text-white",
+    activeClass: "bg-gray-700 text-white border-gray-700 hover:bg-gray-800",
+    badgeClass: "bg-gray-700 text-white",
   },
   ready_to_ship: {
     label: "รอจัดส่ง",
-    activeClass:
-      "bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700",
-    badgeClass:
-      "bg-indigo-600 text-white",
+    activeClass: "bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700",
+    badgeClass: "bg-indigo-600 text-white",
   },
   paid: {
     label: "ชำระเงินแล้ว",
-    activeClass:
-      "bg-sky-600 text-white border-sky-600 hover:bg-sky-700",
-    badgeClass:
-      "bg-sky-600 text-white",
+    activeClass: "bg-sky-600 text-white border-sky-600 hover:bg-sky-700",
+    badgeClass: "bg-sky-600 text-white", // แก้บั๊ก text-white
   },
   shipped: {
     label: "จัดส่งแล้ว",
-    activeClass:
-      "bg-amber-500 text-black border-amber-500 hover:bg-amber-600",
-    badgeClass:
-      "bg-amber-500 text-black",
+    activeClass: "bg-amber-500 text-black border-amber-500 hover:bg-amber-600",
+    badgeClass: "bg-amber-500 text-black",
   },
   done: {
     label: "สำเร็จ",
-    activeClass:
-      "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700",
-    badgeClass:
-      "bg-emerald-600 text-white",
+    activeClass: "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700",
+    badgeClass: "bg-emerald-600 text-white",
   },
   cancelled: {
     label: "ยกเลิก",
-    activeClass:
-      "bg-rose-600 text-white border-rose-600 hover:bg-rose-700",
-    badgeClass:
-      "bg-rose-600 text-white",
+    activeClass: "bg-rose-600 text-white border-rose-600 hover:bg-rose-700",
+    badgeClass: "bg-rose-600 text-white",
   },
 };
 const ALL_STATUSES = Object.keys(STATUS_CONFIG);
@@ -61,6 +49,89 @@ const PAY_LABELS = {
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
 };
+
+/** ==== ค่ายขนส่ง + สร้างลิงก์ติดตาม ==== */
+const TRACK_CARRIERS = {
+  thailandpost: "ไปรษณีย์ไทย (Thailand Post)",
+  kerry: "Kerry Express",
+  flash: "Flash Express",
+  jnt: "J&T Express",
+  best: "BEST Express",
+  ninjavan: "NinjaVan",
+};
+
+const trackingUrl = (carrier, code) => {
+  const c = String(carrier || "").toLowerCase();
+  const t = String(code || "").trim();
+  if (!t) return null;
+  switch (c) {
+    case "thailandpost":
+      return `https://track.thailandpost.com/?trackNumber=${encodeURIComponent(t)}`;
+    case "kerry":
+      return `https://th.kerryexpress.com/th/track/?track=${encodeURIComponent(t)}`;
+    case "flash":
+      return `https://www.flashexpress.com/fle/tracking?se=${encodeURIComponent(t)}`;
+    case "jnt":
+      return `https://www.jtexpress.co.th/service/track/${encodeURIComponent(t)}`;
+    case "best":
+      return `https://www.best-inc.co.th/track?billcode=${encodeURIComponent(t)}`;
+    case "ninjavan":
+      return `https://www.ninjavan.co/th-th/tracking?id=${encodeURIComponent(t)}`;
+    default:
+      return `https://www.track.in.th/th/tracking/${encodeURIComponent(t)}`;
+  }
+};
+
+/** ปุ่มคัดลอกข้อความเล็กๆ */
+function Copyable({ text, children }) {
+  const onCopy = () => {
+    if (!text) return;
+    navigator.clipboard?.writeText(String(text)).then(() => {
+      alert("คัดลอกแล้ว");
+    });
+  };
+  return (
+    <button
+      onClick={onCopy}
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-gray-300 hover:bg-gray-100 active:scale-[0.99] transition"
+      title="คัดลอก"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** กล่องแสดง Tracking สวยๆ */
+function TrackingBadge({ carrier, code }) {
+  if (!carrier && !code) return null;
+  const label = TRACK_CARRIERS[carrier] || "ไม่ระบุค่าย";
+  const url = trackingUrl(carrier, code);
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-600 text-white">
+          🚚 {label}
+        </span>
+        {code && (
+          <span className="font-mono text-sm text-gray-900">
+            เลขพัสดุ: <span className="font-semibold">{code}</span>
+          </span>
+        )}
+        {code && <Copyable text={code}>คัดลอกเลข</Copyable>}
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm underline text-indigo-700 hover:text-indigo-900"
+          >
+            ติดตามพัสดุ
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function MyOrders() {
   const { user } = useAuth();
@@ -199,25 +270,43 @@ export default function MyOrders() {
 
       {/* รายการออเดอร์ */}
       {loading ? (
-        <div className="text-gray-500">กำลังโหลด...</div>
+        // Skeleton
+        <div className="space-y-4">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="rounded-2xl border border-gray-200 p-5 bg-white">
+              <div className="animate-pulse space-y-3">
+                <div className="h-4 w-56 bg-gray-200 rounded" />
+                <div className="h-3 w-40 bg-gray-200 rounded" />
+                <div className="h-20 w-full bg-gray-100 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
       ) : visibleOrders.length === 0 ? (
-        <div className="text-gray-500">ไม่มีออเดอร์ตามตัวกรองที่เลือก</div>
+        // Empty state
+        <div className="text-center text-gray-600 bg-gray-50 border border-dashed border-gray-300 rounded-2xl p-10">
+          <div className="text-4xl mb-2">🧺</div>
+          ยังไม่มีออเดอร์ตามตัวกรองที่เลือก
+        </div>
       ) : (
         <div className="space-y-6">
           {visibleOrders.map((o) => (
             <div
               key={o.id}
               className={[
-                "bg-white border border-gray-200 rounded-2xl p-5 shadow-sm",
+                "rounded-2xl border shadow-sm p-5 bg-white/90 backdrop-blur",
+                "hover:shadow-md hover:-translate-y-[1px] transition",
                 o.status === "cancelled" ? "opacity-60" : "",
               ].join(" ")}
             >
-              <div className="flex items-start justify-between gap-3 mb-4">
-                <div>
+              {/* Header */}
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="space-y-1">
                   <div className="font-semibold text-gray-900">ออเดอร์ {o.order_code}</div>
                   <div className="text-sm text-gray-600">
                     วันที่: {o.created_at ? new Date(o.created_at).toLocaleString("th-TH") : "-"}
                   </div>
+
                   {(o.payment_method || o.payment_status) && (
                     <div className="text-sm text-gray-700 mt-1">
                       วิธีชำระเงิน: <span className="font-medium">{o.payment_method || "-"}</span>
@@ -239,11 +328,18 @@ export default function MyOrders() {
                       )}
                     </div>
                   )}
+
+                  {/* Tracking */}
+                  {(o.tracking_code || o.tracking_carrier) && (
+                    <TrackingBadge carrier={o.tracking_carrier} code={o.tracking_code} />
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
                   <span
-                    className={`px-3 py-1 rounded-full text-sm font-semibold ${STATUS_CONFIG[o.status]?.badgeClass || "bg-gray-200 text-gray-800"}`}
+                    className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                      STATUS_CONFIG[o.status]?.badgeClass || "bg-gray-200 text-gray-800"
+                    }`}
                   >
                     {STATUS_CONFIG[o.status]?.label ?? o.status ?? "-"}
                   </span>
@@ -259,6 +355,7 @@ export default function MyOrders() {
                 </div>
               </div>
 
+              {/* Items */}
               <div className="divide-y divide-gray-200">
                 {o.items?.map((it) => (
                   <div key={it.id} className="flex items-center gap-4 py-3">
@@ -276,13 +373,12 @@ export default function MyOrders() {
                     <div className="text-sm text-gray-600">
                       {it.quantity} × {CURRENCY(it.unit_price ?? it.price_per_unit)}
                     </div>
-                    <div className="font-semibold text-gray-900">
-                      {CURRENCY(it.line_total)}
-                    </div>
+                    <div className="font-semibold text-gray-900">{CURRENCY(it.line_total)}</div>
                   </div>
                 ))}
               </div>
 
+              {/* Summary */}
               <div className="flex justify-end mt-4">
                 <div className="text-right">
                   <div className="text-gray-600 text-sm">ยอดรวม</div>

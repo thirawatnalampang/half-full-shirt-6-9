@@ -699,14 +699,13 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-/* ====================== ADMIN: Orders ====================== */
-
-// รายการออเดอร์ (สั้น) — รวมคอลัมน์ชำระเงิน
+// ================== 1) รายการออเดอร์ (สั้น) — รวมชำระเงิน + tracking ==================
 app.get("/api/admin/orders", async (req, res) => {
   try {
     const q = `
       SELECT id, order_code, full_name, email, total_price, status, created_at,
-             payment_status, slip_image
+             payment_status, slip_image,
+             tracking_carrier, tracking_code
       FROM orders
       ORDER BY created_at DESC
     `;
@@ -718,26 +717,28 @@ app.get("/api/admin/orders", async (req, res) => {
   }
 });
 
-// รายละเอียดออเดอร์ + รายการสินค้า  — รวมฟิลด์การชำระเงิน
+// ========== 2) รายละเอียดออเดอร์ + รายการสินค้า — รวมชำระเงิน + tracking ==========
 app.get("/api/admin/orders/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const ordQ = `
-  SELECT id, order_code, user_id, email,
-         full_name, phone, address_line, district, province, postcode,
-         shipping_method, payment_method,
-         subtotal, shipping, total_price, total_qty, note,
-         status, created_at,
-         payment_status, paid_at, payment_amount, slip_image
-  FROM orders
-  WHERE id = $1
-`;
+      SELECT id, order_code, user_id, email,
+             full_name, phone, address_line, district, province, postcode,
+             shipping_method, payment_method,
+             subtotal, shipping, total_price, total_qty, note,
+             status, created_at,
+             payment_status, paid_at, payment_amount, slip_image,
+             tracking_carrier, tracking_code
+      FROM orders
+      WHERE id = $1
+    `;
     const ordR = await pool.query(ordQ, [id]);
     if (ordR.rowCount === 0) return res.status(404).json({ message: "ไม่พบออเดอร์" });
 
     const itemsQ = `
       SELECT id, product_id, name, size, unit_price, quantity, line_total, image
-      FROM order_items WHERE order_id = $1
+      FROM order_items
+      WHERE order_id = $1
     `;
     const itemsR = await pool.query(itemsQ, [id]);
 
@@ -748,13 +749,12 @@ app.get("/api/admin/orders/:id", async (req, res) => {
   }
 });
 
-// เปลี่ยนสถานะออเดอร์
+// ============================= 3) เปลี่ยนสถานะออเดอร์ =============================
 app.patch("/api/admin/orders/:id/status", async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body || {};
 
-    // ✅ เพิ่ม ready_to_ship เข้า whitelist
     const allow = ["pending", "ready_to_ship", "paid", "shipped", "done", "cancelled"];
     if (!allow.includes(status)) return res.status(400).json({ message: "สถานะไม่ถูกต้อง" });
 
@@ -769,7 +769,8 @@ app.patch("/api/admin/orders/:id/status", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-// ลูกค้าอัปโหลดสลิป
+
+// ============================= 4) ลูกค้าอัปโหลดสลิป =============================
 app.post('/api/orders/:id/upload-slip', upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -780,7 +781,8 @@ app.post('/api/orders/:id/upload-slip', upload.single('file'), async (req, res) 
     const q = `
       UPDATE orders
       SET slip_image=$1, payment_txid=$2, payment_amount=$3, payment_status='submitted'
-      WHERE id=$4 RETURNING id, payment_status, slip_image, payment_amount, payment_txid
+      WHERE id=$4
+      RETURNING id, payment_status, slip_image, payment_amount, payment_txid
     `;
     const r = await pool.query(q, [img, txid || null, amount ? Number(amount) : null, id]);
     if (r.rowCount === 0) return res.status(404).json({ message: 'ไม่พบออเดอร์' });
@@ -791,7 +793,7 @@ app.post('/api/orders/:id/upload-slip', upload.single('file'), async (req, res) 
   }
 });
 
-// แอดมินยืนยันรับเงิน
+// ======================== 5) แอดมินยืนยันรับเงิน (→ ready_to_ship) ========================
 app.patch('/api/admin/orders/:id/mark-paid', async (req, res) => {
   try {
     const { id } = req.params;
@@ -802,7 +804,7 @@ app.patch('/api/admin/orders/:id/mark-paid', async (req, res) => {
           paid_at=NOW(),
           payment_txid=COALESCE($1, payment_txid),
           payment_amount=COALESCE($2, payment_amount),
-          status='ready_to_ship'      -- ✅ เด้งไป "รอจัดส่ง"
+          status='ready_to_ship'
       WHERE id=$3
       RETURNING id, status, payment_status, paid_at, payment_amount, payment_txid
     `;
@@ -815,7 +817,7 @@ app.patch('/api/admin/orders/:id/mark-paid', async (req, res) => {
   }
 });
 
-// แอดมินปฏิเสธสลิป
+// ============================= 6) แอดมินปฏิเสธสลิป =============================
 app.patch('/api/admin/orders/:id/reject-slip', async (req, res) => {
   try {
     const { id } = req.params;
@@ -834,7 +836,7 @@ app.patch('/api/admin/orders/:id/reject-slip', async (req, res) => {
   }
 });
 
-// PATCH /api/admin/orders/:id/cancel  body: { restock: true|false }
+// ============================= 7) ยกเลิกออเดอร์ (คืนสต็อกได้) =============================
 app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
   const { id } = req.params;
   const { restock } = req.body || {};
@@ -842,7 +844,6 @@ app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // ตรวจสถานะก่อน
     const ord = await client.query(
       `SELECT id, status FROM orders WHERE id=$1 FOR UPDATE`, [id]
     );
@@ -854,7 +855,6 @@ app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
       await client.query('ROLLBACK'); return res.status(400).json({ message: 'ออเดอร์สถานะนี้ยกเลิกไม่ได้' });
     }
 
-    // คืนสต็อกถ้าต้องการ
     if (restock) {
       const items = await client.query(
         `SELECT product_id, quantity FROM order_items WHERE order_id=$1`, [id]
@@ -881,38 +881,47 @@ app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
   }
 });
 
-// ดึงออเดอร์ของ user
-app.get("/api/my-orders", async (req, res) => {
+app.patch("/api/admin/orders/:id/tracking", async (req, res) => {
   try {
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ message: "missing userId" });
+    const { id } = req.params;
+    let { tracking_carrier, tracking_code } = req.body || {};
+
+    // ค่าว่าง -> null
+    const norm = (v) => {
+      if (v === undefined || v === null) return null;
+      const s = String(v).trim();
+      return s === "" ? null : s;
+    };
+    tracking_carrier = norm(tracking_carrier);
+    tracking_code = norm(tracking_code);
+
+    const allowCarriers = new Set(["thailandpost", "kerry", "flash", "jnt", "best", "ninjavan"]);
+    if (tracking_carrier && !allowCarriers.has(tracking_carrier.toLowerCase())) {
+      return res.status(400).json({ message: "ค่ายขนส่งไม่ถูกต้อง" });
+    }
 
     const q = `
-      SELECT o.*, 
-             json_agg(json_build_object(
-               'id', oi.id,
-               'name', oi.name,
-               'size', oi.size,
-               'quantity', oi.quantity,
-               'unit_price', oi.unit_price,
-               'line_total', oi.line_total,
-               'image', oi.image
-             )) AS items
-      FROM orders o
-      LEFT JOIN order_items oi ON o.id = oi.order_id
-      WHERE o.user_id = $1
-      GROUP BY o.id
-      ORDER BY o.created_at DESC
+      UPDATE orders
+      SET tracking_carrier = $1::text,
+          tracking_code    = $2::text,
+          status = CASE
+                     WHEN ($2::text IS NOT NULL) AND status IN ('paid','ready_to_ship') THEN 'shipped'
+                     ELSE status
+                   END
+      WHERE id = $3::int
+      RETURNING id, status, tracking_carrier, tracking_code
     `;
-    const r = await pool.query(q, [userId]);
-    res.json(r.rows);
+    const r = await pool.query(q, [tracking_carrier, tracking_code, id]);
+    if (r.rowCount === 0) return res.status(404).json({ message: "ไม่พบออเดอร์" });
+
+    res.json(r.rows[0]);
   } catch (err) {
-    console.error("GET /api/my-orders error:", err);
-    res.status(500).json({ message: "server error" });
+    console.error("PATCH /api/admin/orders/:id/tracking error:", err);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
-// GET /api/my-orders?userId=123
+// =================== 9) ดึงออเดอร์ของ user (รวม items + tracking) ===================
 app.get('/api/my-orders', async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ message: 'missing userId' });
@@ -920,7 +929,8 @@ app.get('/api/my-orders', async (req, res) => {
   try {
     const o = await pool.query(
       `SELECT id, order_code, created_at, status, total_price,
-              payment_method, payment_status, slip_image, payment_amount
+              payment_method, payment_status, slip_image, payment_amount,
+              tracking_carrier, tracking_code
        FROM orders
        WHERE user_id = $1
        ORDER BY created_at DESC`,
@@ -946,57 +956,6 @@ app.get('/api/my-orders', async (req, res) => {
   } catch (e) {
     console.error('GET /api/my-orders error', e);
     res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// PATCH /api/orders/:id/cancel  body: { restock: true|false }
-app.patch('/api/orders/:id/cancel', async (req, res) => {
-  const { id } = req.params;
-  const { restock } = req.body || {};
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const ord = await client.query(
-      `SELECT status FROM orders WHERE id=$1 FOR UPDATE`,
-      [id]
-    );
-    if (ord.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ message: 'ไม่พบออเดอร์' });
-    }
-    const cur = ord.rows[0].status;
-    if (!['pending','ready_to_ship'].includes(cur)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: 'ยกเลิกไม่ได้ในสถานะปัจจุบัน' });
-    }
-
-    if (restock) {
-      const items = await client.query(
-        `SELECT product_id, quantity FROM order_items WHERE order_id=$1`,
-        [id]
-      );
-      for (const it of items.rows) {
-        await client.query(
-          `UPDATE products SET stock = stock + $1 WHERE id = $2`,
-          [it.quantity, it.product_id]
-        );
-      }
-    }
-
-    const r = await client.query(
-      `UPDATE orders SET status='cancelled' WHERE id=$1 RETURNING id, status`,
-      [id]
-    );
-
-    await client.query('COMMIT');
-    res.json(r.rows[0]);
-  } catch (e) {
-    await client.query('ROLLBACK');
-    console.error('cancel error', e);
-    res.status(500).json({ message: 'Server error' });
-  } finally {
-    client.release();
   }
 });
 // === ช่วยอ่านช่วงวัน ===

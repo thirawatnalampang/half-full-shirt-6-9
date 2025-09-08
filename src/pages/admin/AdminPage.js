@@ -1,15 +1,17 @@
+// src/pages/admin/AdminPage.jsx
 import React, { useState, useEffect, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import {
   FaTshirt, FaTags, FaShoppingBag, FaUsers,
   FaPlus, FaSearch, FaEdit, FaTrash, FaSave, FaTimes, FaHome,
-  FaChartLine
+  FaChartLine, FaBars,   // ⬅️ เพิ่ม FaBars
 } from "react-icons/fa";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell, Legend,
 } from "recharts";
+
 const API = {
   products: "http://localhost:3000/api/admin/products",
   categories: "http://localhost:3000/api/admin/categories",
@@ -21,12 +23,21 @@ function numberFormat(n) {
   return new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(n || 0);
 }
 
-function TopBar({ title }) {
+/* -------------------- TopBar (มีปุ่มแฮมเบอร์เกอร์บนมือถือ) -------------------- */
+function TopBar({ title, onMenu }) {
   return (
-    <header className="sticky top-0 z-20 bg-neutral-900/80 backdrop-blur border-b border-neutral-800">
+    <header className="sticky top-0 z-30 bg-[#111]/80 backdrop-blur border-b border-neutral-800">
       <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link to="/" className="text-neutral-300 hover:text-white" title="กลับหน้าหลัก">
+          {/* Hamburger (mobile only) */}
+          <button
+            onClick={onMenu}
+            className="md:hidden p-2 rounded-lg hover:bg-white/10 text-white"
+            aria-label="เปิดเมนู"
+          >
+            <FaBars />
+          </button>
+          <Link to="/" className="hidden md:inline text-neutral-300 hover:text-white" title="กลับหน้าหลัก">
             <FaHome size={18} />
           </Link>
           <h1 className="text-white font-semibold">{title}</h1>
@@ -38,39 +49,68 @@ function TopBar({ title }) {
 }
 
 const menu = [
-  { key: "products", label: "สินค้า", icon: <FaTshirt /> },
+  { key: "products", label: "สินค้า",     icon: <FaTshirt /> },
   { key: "categories", label: "หมวดหมู่", icon: <FaTags /> },
-  { key: "orders", label: "ออเดอร์", icon: <FaShoppingBag /> },
-  { key: "users", label: "ผู้ใช้", icon: <FaUsers /> },
+  { key: "orders", label: "ออเดอร์",     icon: <FaShoppingBag /> },
+  { key: "users", label: "ผู้ใช้",        icon: <FaUsers /> },
   { key: "dashboard", label: "แดชบอร์ด", icon: <FaChartLine /> },
 ];
 
-function Sidebar({ active, onChange }) {
+/* -------------------- Sidebar (off-canvas บนมือถือ, sticky บนเดสก์ท็อป) -------------------- */
+function Sidebar({ active, onChange, isOpen, onClose }) {
   return (
-    <aside className="w-64 shrink-0 bg-neutral-950 border-r border-neutral-800 h-[calc(100dvh-56px)] sticky top-14">
-      <div className="p-4">
-        <div className="text-neutral-400 text-xs mb-2">เมนูจัดการ</div>
-        <ul className="space-y-1">
-          {menu.map((m) => (
-            <li key={m.key}>
-              <button
-                onClick={() => onChange(m.key)}
-                className={classNames(
-                  "w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm",
-                  active === m.key ? "bg-neutral-800 text-white" : "text-neutral-300 hover:bg-neutral-900 hover:text-white"
-                )}
-              >
-                <span className="text-neutral-300">{m.icon}</span>
-                <span>{m.label}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </aside>
+    <>
+      {/* Overlay (mobile) */}
+      {isOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-40 bg-black/60"
+          onClick={onClose}
+        />
+      )}
+
+      <aside
+        className={classNames(
+          "fixed md:static inset-y-0 left-0 z-50 md:z-10 w-72 md:w-64 bg-neutral-950 border-r border-neutral-800",
+          "transform transition-transform duration-300",
+          isOpen ? "translate-x-0" : "-translate-x-full",
+          "md:translate-x-0",
+        )}
+        style={{ height: "100dvh" }}
+      >
+        <div className="h-14 px-4 flex items-center justify-between md:hidden border-b border-neutral-800">
+          <div className="text-white font-semibold">เมนูจัดการ</div>
+          <button onClick={onClose} className="p-2 rounded-lg text-neutral-300 hover:bg-white/10" aria-label="ปิดเมนู">
+            <FaTimes />
+          </button>
+        </div>
+
+        <div className="p-4 h-[calc(100dvh-56px)] md:h-[calc(100dvh-56px)] overflow-y-auto">
+          <div className="text-neutral-400 text-xs mb-2 hidden md:block">เมนูจัดการ</div>
+          <ul className="space-y-1">
+            {menu.map((m) => (
+              <li key={m.key}>
+                <button
+                  onClick={() => { onChange(m.key); onClose?.(); }}
+                  className={classNames(
+                    "w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm",
+                    active === m.key
+                      ? "bg-neutral-800 text-white"
+                      : "text-neutral-300 hover:bg-neutral-900 hover:text-white"
+                  )}
+                >
+                  <span className="text-neutral-300">{m.icon}</span>
+                  <span>{m.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </aside>
+    </>
   );
 }
 
+/* -------------------- ProductsPanel -------------------- */
 function ProductsPanel() {
   const [list, setList] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -78,8 +118,8 @@ function ProductsPanel() {
   const [q, setQ] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [file, setFile] = useState(null);          // <- เก็บไฟล์จริง
-  const [preview, setPreview] = useState("");      // <- preview URL
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState("");
 
   const filtered = useMemo(() => {
     const kw = q.toLowerCase().trim();
@@ -139,7 +179,6 @@ function ProductsPanel() {
     setPreview("");
   }
 
-  // ✅ save function ที่แก้แล้ว
   async function save() {
     if (!editing) return;
     if (!editing.name?.trim()) return alert("กรุณากรอกชื่อสินค้า");
@@ -150,12 +189,8 @@ function ProductsPanel() {
     formData.append("stock", editing.stock ?? 0);
     if (editing.category_id) formData.append("category_id", editing.category_id);
     if (editing.description) formData.append("description", editing.description);
-
-    if (file) {
-      formData.append("image", file); 
-    } else if (editing.image) {
-      formData.append("oldImage", editing.image); 
-    }
+    if (file) formData.append("image", file);
+    else if (editing.image) formData.append("oldImage", editing.image);
 
     const method = editing.id ? "PUT" : "POST";
     const url = editing.id ? `${API.products}/${editing.id}` : API.products;
@@ -163,12 +198,10 @@ function ProductsPanel() {
     try {
       const res = await fetch(url, { method, body: formData });
       const data = await res.json();
-
       if (!res.ok || !data.success) {
         console.error("save failed:", data);
         return alert("บันทึกไม่สำเร็จ");
       }
-
       await loadProducts();
       closeDrawer();
     } catch (err) {
@@ -187,12 +220,8 @@ function ProductsPanel() {
   function onFileChange(e) {
     const f = e.target.files?.[0];
     setFile(f || null);
-    if (f) {
-      const url = URL.createObjectURL(f);
-      setPreview(url);
-    } else {
-      setPreview("");
-    }
+    if (f) setPreview(URL.createObjectURL(f));
+    else setPreview("");
   }
 
   return (
@@ -281,7 +310,7 @@ function ProductsPanel() {
         </table>
       </div>
 
-      {/* Drawer */}
+      {/* Drawer ฟอร์มสินค้า */}
       {drawerOpen && (
         <div className="fixed inset-0 z-30">
           <div className="absolute inset-0 bg-black/60" onClick={closeDrawer} />
@@ -346,15 +375,9 @@ function ProductsPanel() {
                 />
               </div>
 
-              {/* อัปโหลดไฟล์จากเครื่อง */}
               <div>
                 <label className="block text-sm text-neutral-400 mb-1">รูปภาพสินค้า (อัปโหลดไฟล์)</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={onFileChange}
-                  className="w-full text-neutral-300"
-                />
+                <input type="file" accept="image/*" onChange={onFileChange} className="w-full text-neutral-300" />
                 {(preview || editing?.image) && (
                   <img
                     src={preview || (editing.image ? `http://localhost:3000${editing.image}` : "")}
@@ -380,9 +403,9 @@ function ProductsPanel() {
   );
 }
 
+
 // Placeholder panels
 function CategoriesPanel() { return <div className="p-6 text-neutral-300">TODO: CRUD หมวดหมู่</div>; }
-
 
 
 
@@ -451,6 +474,44 @@ function OrdersPanel() {
     }
   };
 
+  /* ================= Tracking helpers & state ================= */
+  const TRACK_CARRIERS = {
+    thailandpost: { label: "ไปรษณีย์ไทย (Thailand Post)" },
+    kerry:        { label: "Kerry Express" },
+    flash:        { label: "Flash Express" },
+    jnt:          { label: "J&T Express" },
+    best:         { label: "BEST Express" },
+    ninjavan:     { label: "NinjaVan" },
+  };
+
+  const trackingUrl = (carrier, code) => {
+    const c = String(carrier || "").toLowerCase();
+    const t = String(code || "").trim();
+    if (!t) return null;
+
+    switch (c) {
+      case "thailandpost":
+        return `https://track.thailandpost.com/?trackNumber=${encodeURIComponent(t)}`;
+      case "kerry":
+        return `https://th.kerryexpress.com/th/track/?track=${encodeURIComponent(t)}`;
+      case "flash":
+        return `https://www.flashexpress.com/fle/tracking?se=${encodeURIComponent(t)}`;
+      case "jnt":
+        return `https://www.jtexpress.co.th/service/track/${encodeURIComponent(t)}`;
+      case "best":
+        return `https://www.best-inc.co.th/track?billcode=${encodeURIComponent(t)}`;
+      case "ninjavan":
+        return `https://www.ninjavan.co/th-th/tracking?id=${encodeURIComponent(t)}`;
+      default:
+        // ตัวกลาง ถ้าไม่ได้เลือกค่าย
+        return `https://www.track.in.th/th/tracking/${encodeURIComponent(t)}`;
+    }
+  };
+
+  const [trackingDraft, setTrackingDraft] = useState({ carrier: "", code: "" });
+  const [savingTracking, setSavingTracking] = useState(false);
+
+  /* ================= Data loading ================= */
   async function loadOrders() {
     setLoading(true);
     try {
@@ -484,12 +545,18 @@ function OrdersPanel() {
       if (!data?.order) throw new Error("รูปแบบข้อมูลไม่ถูกต้อง (ไม่มี order)");
       setDetail(data);
       setStatusDraft(data.order?.status ?? "pending");
+      // init tracking draft
+      setTrackingDraft({
+        carrier: data.order?.tracking_carrier || "",
+        code: data.order?.tracking_code || "",
+      });
       setDetailOpen(true);
     } catch (e) {
       alert(e.message);
     }
   }
 
+  /* ================= Actions: status / payment ================= */
   async function saveStatus() {
     const oid = detail?.order?.id;
     if (!oid) return;
@@ -577,6 +644,54 @@ function OrdersPanel() {
     }
   }
 
+  /* ================= Actions: tracking ================= */
+  async function saveTracking() {
+    const oid = detail?.order?.id;
+    if (!oid) return;
+    setSavingTracking(true);
+    try {
+      const body = {
+        tracking_carrier: trackingDraft.carrier || null,
+        tracking_code: (trackingDraft.code || "").trim() || null,
+      };
+      const res = await fetch(`${API_ORDERS}/${oid}/tracking`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "บันทึกเลขพัสดุไม่สำเร็จ");
+
+      // sync state
+      setOrders(os => os.map(o => (
+        o.id === oid ? { ...o, tracking_carrier: data.tracking_carrier, tracking_code: data.tracking_code } : o
+      )));
+      setDetail(d => d ? {
+        ...d,
+        order: { ...d.order, tracking_carrier: data.tracking_carrier, tracking_code: data.tracking_code }
+      } : d);
+
+      alert("บันทึกเลขพัสดุเรียบร้อย");
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setSavingTracking(false);
+    }
+  }
+
+  function clearTracking() {
+    setTrackingDraft({ carrier: "", code: "" });
+  }
+
+  function copyTracking() {
+    const txt = trackingDraft.code || detail?.order?.tracking_code || "";
+    if (!txt) return;
+    navigator.clipboard.writeText(txt).then(() => {
+      alert("คัดลอกเลขพัสดุแล้ว");
+    });
+  }
+
+  /* ================= Render ================= */
   return (
     <div className="p-6">
       <h2 className="text-xl font-semibold text-white mb-4">รายการออเดอร์</h2>
@@ -589,6 +704,7 @@ function OrdersPanel() {
               <th className="px-4 py-3 text-left">ลูกค้า</th>
               <th className="px-4 py-3 text-left">สถานะ</th>
               <th className="px-4 py-3 text-left">การชำระเงิน</th>
+              <th className="px-4 py-3 text-left">ติดตาม</th> {/* ← เพิ่ม */}
               <th className="px-4 py-3 text-right">ยอดรวม</th>
               <th className="px-4 py-3 text-left">วันที่</th>
               <th className="px-4 py-3 text-right">จัดการ</th>
@@ -596,9 +712,9 @@ function OrdersPanel() {
           </thead>
           <tbody className="divide-y divide-neutral-800 bg-neutral-900">
             {loading ? (
-              <tr><td colSpan={7} className="px-4 py-6 text-center text-neutral-400">กำลังโหลด...</td></tr>
+              <tr><td colSpan={8} className="px-4 py-6 text-center text-neutral-400">กำลังโหลด...</td></tr>
             ) : orders.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-6 text-center text-neutral-400">ยังไม่มีออเดอร์</td></tr>
+              <tr><td colSpan={8} className="px-4 py-6 text-center text-neutral-400">ยังไม่มีออเดอร์</td></tr>
             ) : (
               orders.map((o) => (
                 <tr key={o.id} className="hover:bg-neutral-800/60">
@@ -632,6 +748,23 @@ function OrdersPanel() {
                       </a>
                     )}
                   </td>
+
+                  {/* คอลัมน์ติดตาม */}
+                  <td className="px-4 py-3">
+                    {o.tracking_code ? (
+                      <a
+                        href={trackingUrl(o.tracking_carrier, o.tracking_code)}
+                        target="_blank" rel="noreferrer"
+                        className="text-sm underline text-sky-300"
+                        title={o.tracking_code}
+                      >
+                        {(TRACK_CARRIERS[o.tracking_carrier]?.label || "ติดตาม")} • {o.tracking_code}
+                      </a>
+                    ) : (
+                      <span className="text-neutral-500 text-sm">—</span>
+                    )}
+                  </td>
+
                   <td className="px-4 py-3 text-right text-white">{CURRENCY(o.total_price)}</td>
                   <td className="px-4 py-3 text-neutral-400">
                     {o.created_at ? new Date(o.created_at).toLocaleString("th-TH") : "-"}
@@ -771,6 +904,7 @@ function OrdersPanel() {
                   {detail.order.postcode ? ` ${detail.order.postcode}` : ""}
                 </div>
               </div>
+
               <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
                 <div className="text-neutral-400 text-sm mb-1">การจัดส่ง/ชำระเงิน</div>
                 <div className="text-neutral-300 text-sm">จัดส่ง: {detail.order.shipping_method || "-"}</div>
@@ -778,6 +912,71 @@ function OrdersPanel() {
                   ชำระเงิน: {PAYMENT_METHOD_TH[detail.order.payment_method] || "-"}
                 </div>
                 {detail.order.note && <div className="text-neutral-300 text-sm mt-1">หมายเหตุ: {detail.order.note}</div>}
+
+                {/* —— Tracking Form —— */}
+                <div className="mt-4 pt-4 border-t border-neutral-800">
+                  <div className="text-white font-medium mb-2">เลขพัสดุ / ค่ายขนส่ง</div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <select
+                      value={trackingDraft.carrier}
+                      onChange={(e) => setTrackingDraft(d => ({ ...d, carrier: e.target.value }))}
+                      className="bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white"
+                    >
+                      <option value="">— เลือกค่าย —</option>
+                      {Object.entries(TRACK_CARRIERS).map(([val, obj]) => (
+                        <option key={val} value={val}>{obj.label}</option>
+                      ))}
+                    </select>
+
+                    <input
+                      value={trackingDraft.code}
+                      onChange={(e) => setTrackingDraft(d => ({ ...d, code: e.target.value }))}
+                      placeholder="เลขพัสดุ เช่น TH1234..., KEX..."
+                      className="bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white sm:col-span-2"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      onClick={saveTracking}
+                      disabled={savingTracking}
+                      className="px-3 py-2 rounded-xl bg-white text-black font-medium hover:bg-neutral-200 disabled:opacity-60"
+                    >
+                      {savingTracking ? "กำลังบันทึก..." : "บันทึกเลขพัสดุ"}
+                    </button>
+
+                    <button
+                      onClick={clearTracking}
+                      className="px-3 py-2 rounded-xl bg-neutral-700 text-white hover:bg-neutral-600"
+                    >
+                      ล้าง
+                    </button>
+
+                    <button
+                      onClick={copyTracking}
+                      className="px-3 py-2 rounded-xl bg-neutral-800 text-white hover:bg-neutral-700"
+                    >
+                      คัดลอกเลขพัสดุ
+                    </button>
+
+                    {(trackingDraft.code || detail.order.tracking_code) && (
+                      <a
+                        href={trackingUrl(trackingDraft.carrier || detail.order.tracking_carrier, trackingDraft.code || detail.order.tracking_code)}
+                        target="_blank" rel="noreferrer"
+                        className="px-3 py-2 rounded-xl bg-sky-600 text-white hover:bg-sky-500"
+                      >
+                        เปิดลิงก์ติดตาม
+                      </a>
+                    )}
+
+                    {detail.order.tracking_code && (
+                      <span className="text-xs text-neutral-400 self-center">
+                        ล่าสุดบันทึก: {(TRACK_CARRIERS[detail.order.tracking_carrier]?.label || "—")} • {detail.order.tracking_code}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -850,6 +1049,8 @@ function OrdersPanel() {
     </div>
   );
 }
+
+
 
 // ==== พาเล็ตและสไตล์กราฟ (โหมดมืดอ่านง่าย) ====
 const CHART = {
@@ -1189,11 +1390,12 @@ function DashboardPanel() {
 }
 
 function UsersPanel() { return <div className="p-6 text-neutral-300">TODO: ตารางผู้ใช้</div>; }
-
+/* -------------------- AdminPage (รวมทั้งหมด + mobile drawer) -------------------- */
 export default function AdminPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [active, setActive] = useState("dashboard");
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     if (!user || user.role !== "admin") {
@@ -1201,12 +1403,23 @@ export default function AdminPage() {
     }
   }, [user, navigate]);
 
+  // ปิดเมนูเมื่อเปลี่ยนแท็บ
+  const handleChange = (key) => {
+    setActive(key);
+    setMobileOpen(false);
+  };
+
   return (
     <div className="min-h-dvh bg-neutral-950">
-      <TopBar title="แผงควบคุมผู้ดูแลระบบ" />
+      <TopBar title="แผงควบคุมผู้ดูแลระบบ" onMenu={() => setMobileOpen(true)} />
       <div className="max-w-7xl mx-auto flex">
-        <Sidebar active={active} onChange={setActive} />
-        <main className="flex-1 min-w-0">
+        <Sidebar
+          active={active}
+          onChange={handleChange}
+          isOpen={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+        />
+        <main className="flex-1 min-w-0 md:ml-0">
           {active === "products" && <ProductsPanel />}
           {active === "categories" && <CategoriesPanel />}
           {active === "orders" && <OrdersPanel />}
