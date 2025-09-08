@@ -31,21 +31,26 @@ const safeParseArr = (json) => {
   }
 };
 
+const isFiniteNum = (n) => Number.isFinite(Number(n));
+
 const readCart = (key) => {
   const raw = localStorage.getItem(key);
   const arr = safeParseArr(raw);
-  return arr.map((it) => {
-    const qty = Number(it?.qty || 1);
-    const parsedMax = toNumFinite(it?.maxStock); // null -> undefined
-    return {
-      ...it,
-      id: normId(it?.id),
-      size: normSize(it?.size),
-      price: Number(it?.price || 0),
-      qty,
-      maxStock: parsedMax ?? Infinity,
-    };
-  });
+  return arr
+    .map((it) => {
+      const qty = Number(it?.qty || 1);
+      const parsedMax = toNumFinite(it?.maxStock); // null -> undefined
+      return {
+        ...it,
+        id: normId(it?.id),
+        size: normSize(it?.size),
+        price: Number(it?.price || 0),
+        qty,
+        maxStock: parsedMax ?? Infinity,
+      };
+    })
+    // 🔒 ทิ้งรายการที่ไม่สมบูรณ์
+    .filter((it) => it.id !== '' && isFiniteNum(it.price) && isFiniteNum(it.qty) && it.qty > 0);
 };
 
 const writeCart = (key, arr) => {
@@ -54,11 +59,11 @@ const writeCart = (key, arr) => {
   localStorage.setItem(key, JSON.stringify(out));
 };
 
-
 const mergeCarts = (a = [], b = []) => {
   const map = new Map();
-  [...a, ...b].forEach(it => {
+  [...a, ...b].forEach((it) => {
     const id = normId(it.id);
+    if (!id) return; // ⛔ กัน id ว่างไม่ให้รวมเข้าไป
     const size = normSize(it.size);
     const key = `${id}::${size ?? ''}`;
     const prev = map.get(key) || { ...it, id, size, qty: 0, price: Number(it.price || 0) };
@@ -161,7 +166,6 @@ export function CartProvider({ children }) {
 
     lastUserKeyRef.current = currKey;
     setHydrated(true);
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userKey]);
 
@@ -189,9 +193,13 @@ export function CartProvider({ children }) {
   const addToCart = (item) => {
     const id = normId(item.id);
     const size = normSize(item.size);
-    const price = Number(item.price || 0);
+    const price = Number(item.price);
     const qtyToAdd = Math.max(1, Number(item.qty) || 1);
     const incomingMax = toNumFinite(item.maxStock);
+
+    // ⛔ ป้องกันของเสียตั้งแต่ต้นทาง
+    if (!id) { console.warn('addToCart: missing id', item); return; }
+    if (!Number.isFinite(price)) { console.warn('addToCart: invalid price', item); return; }
 
     setCart(prev => {
       const idx = findIndexByIdSize(prev, id, size);
@@ -212,7 +220,7 @@ export function CartProvider({ children }) {
       }
 
       const nextQty = clampQty((Number(old.qty) || 0) + qtyToAdd, newMax);
-      copy[idx] = { ...old, qty: nextQty, maxStock: newMax };
+      copy[idx] = { ...old, qty: nextQty, maxStock: newMax, price };
       return copy;
     });
   };
