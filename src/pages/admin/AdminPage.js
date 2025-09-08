@@ -415,7 +415,6 @@ function CategoriesPanel() { return <div className="p-6 text-neutral-300">TODO: 
 
 
 
-
 function OrdersPanel() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -503,7 +502,6 @@ function OrdersPanel() {
       case "ninjavan":
         return `https://www.ninjavan.co/th-th/tracking?id=${encodeURIComponent(t)}`;
       default:
-        // ตัวกลาง ถ้าไม่ได้เลือกค่าย
         return `https://www.track.in.th/th/tracking/${encodeURIComponent(t)}`;
     }
   };
@@ -545,7 +543,6 @@ function OrdersPanel() {
       if (!data?.order) throw new Error("รูปแบบข้อมูลไม่ถูกต้อง (ไม่มี order)");
       setDetail(data);
       setStatusDraft(data.order?.status ?? "pending");
-      // init tracking draft
       setTrackingDraft({
         carrier: data.order?.tracking_carrier || "",
         code: data.order?.tracking_code || "",
@@ -556,29 +553,52 @@ function OrdersPanel() {
     }
   }
 
-  /* ================= Actions: status / payment ================= */
-  async function saveStatus() {
-    const oid = detail?.order?.id;
-    if (!oid) return;
-    setSavingStatus(true);
-    try {
-      const res = await fetch(`${API_ORDERS}/${oid}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: statusDraft }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "บันทึกสถานะไม่สำเร็จ");
-      setOrders(os => os.map(o => (o.id === oid ? { ...o, status: data.status } : o)));
-      setDetail(d => (d ? { ...d, order: { ...d.order, status: data.status } } : d));
-      alert("อัปเดตสถานะเรียบร้อย");
-    } catch (e) {
-      alert(e.message);
-    } finally {
-      setSavingStatus(false);
-    }
-  }
+async function saveStatus() {
+  const oid = detail?.order?.id;
+  if (!oid) return;
+  setSavingStatus(true);
+  try {
+    const res = await fetch(`${API_ORDERS}/${oid}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: statusDraft }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.message || "บันทึกสถานะไม่สำเร็จ");
 
+    setOrders(os =>
+      os.map(o =>
+        o.id === oid
+          ? {
+              ...o,
+              status: data.status,
+              payment_status: data.payment_status ?? o.payment_status,
+            }
+          : o
+      )
+    );
+
+    setDetail(d =>
+      d
+        ? {
+            ...d,
+            order: {
+              ...d.order,
+              status: data.status,
+              payment_status: data.payment_status ?? d.order.payment_status,
+              paid_at: data.paid_at ?? d.order.paid_at,
+            },
+          }
+        : d
+    );
+
+    alert("อัปเดตสถานะเรียบร้อย");
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setSavingStatus(false);
+  }
+}
   async function markPaid() {
     const oid = detail?.order?.id;
     if (!oid) return;
@@ -662,10 +682,9 @@ function OrdersPanel() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "บันทึกเลขพัสดุไม่สำเร็จ");
 
-      // sync state
-      setOrders(os => os.map(o => (
+      setOrders(os => os.map(o =>
         o.id === oid ? { ...o, tracking_carrier: data.tracking_carrier, tracking_code: data.tracking_code } : o
-      )));
+      ));
       setDetail(d => d ? {
         ...d,
         order: { ...d.order, tracking_carrier: data.tracking_carrier, tracking_code: data.tracking_code }
@@ -692,6 +711,9 @@ function OrdersPanel() {
   }
 
   /* ================= Render ================= */
+  const chip = (extra = "") =>
+    `inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${extra}`;
+
   return (
     <div className="p-6">
       <h2 className="text-xl font-semibold text-white mb-4">รายการออเดอร์</h2>
@@ -704,7 +726,7 @@ function OrdersPanel() {
               <th className="px-4 py-3 text-left">ลูกค้า</th>
               <th className="px-4 py-3 text-left">สถานะ</th>
               <th className="px-4 py-3 text-left">การชำระเงิน</th>
-              <th className="px-4 py-3 text-left">ติดตาม</th> {/* ← เพิ่ม */}
+              <th className="px-4 py-3 text-left">ติดตาม</th>
               <th className="px-4 py-3 text-right">ยอดรวม</th>
               <th className="px-4 py-3 text-left">วันที่</th>
               <th className="px-4 py-3 text-right">จัดการ</th>
@@ -722,16 +744,19 @@ function OrdersPanel() {
                     {o.order_code ? o.order_code : `#${o.id}`}
                   </td>
                   <td className="px-4 py-3 text-neutral-300">{o.full_name || o.email || "-"}</td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${statusClass(o.status)}`}>
+
+                  {/* สถานะ: ไม่หักบรรทัด */}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className={chip(statusClass(o.status))}>
                       {STATUS_LABELS[o.status] || "รอดำเนินการ"}
                     </span>
                   </td>
+
+                  {/* การชำระเงิน: ป้ายไม่หักบรรทัด */}
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${payClass(o.payment_status)}`}>
+                    <span className={chip(payClass(o.payment_status))}>
                       {PAY_LABELS[o.payment_status || "unpaid"]}
                     </span>
-                    {/* โชว์ชื่อวิธีชำระเป็นไทย */}
                     <span className="ml-2 text-xs text-neutral-400">
                       {PAYMENT_METHOD_TH[o.payment_method] || "-"}
                     </span>
@@ -824,7 +849,7 @@ function OrdersPanel() {
                 <div>
                   <div className="text-neutral-400 text-sm">การชำระเงิน</div>
                   <div className="mt-1">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${payClass(detail.order.payment_status)}`}>
+                    <span className={chip(payClass(detail.order.payment_status))}>
                       {PAY_LABELS[detail.order.payment_status || "unpaid"]}
                     </span>
                     {detail.order.paid_at && (

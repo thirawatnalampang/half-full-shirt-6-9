@@ -19,6 +19,16 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
 
+// ====== Slip Upload (ไปที่ uploads/slips) ======
+const slipDir = path.join(uploadDir, 'slips');
+if (!fs.existsSync(slipDir)) fs.mkdirSync(slipDir, { recursive: true });
+
+const slipStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, slipDir),
+  filename: (req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
+});
+const slipUpload = multer({ storage: slipStorage });
+
 // serve static files
 app.use('/uploads', express.static(uploadDir));
 app.use(cors());
@@ -749,7 +759,7 @@ app.get("/api/admin/orders/:id", async (req, res) => {
   }
 });
 
-// ============================= 3) เปลี่ยนสถานะออเดอร์ =============================
+// เปลี่ยนสถานะออเดอร์
 app.patch("/api/admin/orders/:id/status", async (req, res) => {
   try {
     const { id } = req.params;
@@ -758,10 +768,36 @@ app.patch("/api/admin/orders/:id/status", async (req, res) => {
     const allow = ["pending", "ready_to_ship", "paid", "shipped", "done", "cancelled"];
     if (!allow.includes(status)) return res.status(400).json({ message: "สถานะไม่ถูกต้อง" });
 
-    const r = await pool.query(
-      `UPDATE orders SET status=$1 WHERE id=$2 RETURNING id, status`,
-      [status, id]
-    );
+    let q, params;
+
+    if (status === "done") {
+      // ถ้ากดสำเร็จ -> ปักสถานะชำระเงินเป็น paid ด้วย
+      q = `
+        UPDATE orders
+        SET status = $1,
+            payment_status = CASE
+              WHEN payment_status <> 'paid' THEN 'paid'
+              ELSE payment_status
+            END,
+            paid_at = CASE
+              WHEN payment_status <> 'paid' THEN NOW()
+              ELSE paid_at
+            END
+        WHERE id = $2
+        RETURNING id, status, payment_status, paid_at
+      `;
+      params = [status, id];
+    } else {
+      q = `
+        UPDATE orders
+        SET status = $1
+        WHERE id = $2
+        RETURNING id, status, payment_status, paid_at
+      `;
+      params = [status, id];
+    }
+
+    const r = await pool.query(q, params);
     if (r.rowCount === 0) return res.status(404).json({ message: "ไม่พบออเดอร์" });
     res.json(r.rows[0]);
   } catch (err) {
@@ -771,11 +807,11 @@ app.patch("/api/admin/orders/:id/status", async (req, res) => {
 });
 
 // ============================= 4) ลูกค้าอัปโหลดสลิป =============================
-app.post('/api/orders/:id/upload-slip', upload.single('file'), async (req, res) => {
+app.post('/api/orders/:id/upload-slip', slipUpload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
     const { txid, amount } = req.body || {};
-    const img = req.file ? `/uploads/${req.file.filename}` : null;
+    const img = req.file ? `/uploads/slips/${req.file.filename}` : null; // << path ใหม่
     if (!img) return res.status(400).json({ message: 'กรุณาแนบสลิป' });
 
     const q = `
