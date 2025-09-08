@@ -3,28 +3,45 @@ import { useAuth } from '../context/AuthContext';
 
 const CartContext = createContext();
 
-/* ---------- Utils ---------- */
+/* ---------- Utils (HARDENED) ---------- */
 const normId = (v) => String(v ?? '');
 const normSize = (v) => (v == null ? null : String(v));
-const toNumFinite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+
+const toNumFinite = (v) => {
+  // อย่าตีความ null/undefined/'' เป็น 0
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
 
 const clampQty = (qty, maxStock) => {
   const max = Number.isFinite(maxStock) ? Math.max(0, Number(maxStock)) : Infinity;
   return Math.max(1, Math.min(Number(qty) || 1, max));
 };
 
-const safeParse = (json, fb = []) => { try { return json ? JSON.parse(json) : fb; } catch { return fb; } };
+// parse แล้วคืนค่าเป็น Array เสมอ (ถ้าเป็น object จะดึง values)
+const safeParseArr = (json) => {
+  try {
+    const data = json ? JSON.parse(json) : [];
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') return Object.values(data);
+    return [];
+  } catch {
+    return [];
+  }
+};
 
 const readCart = (key) => {
   const raw = localStorage.getItem(key);
-  return safeParse(raw, []).map(it => {
-    const qty = Number(it.qty || 1);
-    const parsedMax = toNumFinite(it.maxStock);
+  const arr = safeParseArr(raw);
+  return arr.map((it) => {
+    const qty = Number(it?.qty || 1);
+    const parsedMax = toNumFinite(it?.maxStock); // null -> undefined
     return {
       ...it,
-      id: normId(it.id),
-      size: normSize(it.size),
-      price: Number(it.price || 0),
+      id: normId(it?.id),
+      size: normSize(it?.size),
+      price: Number(it?.price || 0),
       qty,
       maxStock: parsedMax ?? Infinity,
     };
@@ -32,8 +49,11 @@ const readCart = (key) => {
 };
 
 const writeCart = (key, arr) => {
-  localStorage.setItem(key, JSON.stringify(arr));
+  // บันทึกเป็น array เสมอ
+  const out = Array.isArray(arr) ? arr : (arr && typeof arr === 'object' ? Object.values(arr) : []);
+  localStorage.setItem(key, JSON.stringify(out));
 };
+
 
 const mergeCarts = (a = [], b = []) => {
   const map = new Map();
