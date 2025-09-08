@@ -12,6 +12,7 @@ import AdminPage from './pages/admin/AdminPage';
 import CheckoutPage from './pages/CheckoutPage';
 import OrderSuccess from './pages/OrderSuccess';
 import MyOrders from './pages/MyOrders';
+import SearchPage from './pages/SearchPage';
 
 
 import './App.css';
@@ -36,6 +37,7 @@ function App() {
   <Route path="/order-success" element={<OrderSuccess />} />
   <Route path="/order-success/:orderId" element={<OrderSuccess />} />
         <Route path="/orders" element={<MyOrders />} />
+        <Route path="/search" element={<SearchPage />} />
 
       </Routes>
       {/* ไม่มี <Cart /> ลอยล่างขวาแล้ว */}

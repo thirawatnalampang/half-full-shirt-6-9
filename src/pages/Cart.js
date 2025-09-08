@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';            // ⬅️ เพิ่ม useNavigate
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';                // ⬅️ เพิ่ม useAuth
 
 const formatTHB = (n) =>
   new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Number(n || 0));
@@ -10,6 +11,8 @@ const SHIPPING_FEE = 50;
 
 export default function CartPage() {
   const { cart, removeFromCart, setQty, increaseQty, decreaseQty, clearCart } = useCart();
+  const { user } = useAuth();                                    // ⬅️ ดึง user จาก Context
+  const navigate = useNavigate();                                // ⬅️ สำหรับนำทาง
 
   const { subtotal, totalQty, shipping, total } = useMemo(() => {
     const subtotal = cart.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.qty) || 1), 0);
@@ -18,6 +21,17 @@ export default function CartPage() {
     const total = subtotal + shipping;
     return { subtotal, totalQty, shipping, total };
   }, [cart]);
+
+  // ⬅️ เช็กล็อกอินก่อนพาไปหน้า checkout
+  const handleCheckout = (e) => {
+    e.preventDefault();
+    if (!user) {
+      const redirect = encodeURIComponent('/checkout');
+      navigate(`/login?redirect=${redirect}`);
+      return;
+    }
+    navigate('/checkout');
+  };
 
   if (cart.length === 0) {
     return (
@@ -167,6 +181,12 @@ export default function CartPage() {
           <div className="lg:sticky lg:top-6 bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-5">
             <h2 className="text-lg font-bold mb-4">สรุปคำสั่งซื้อ</h2>
 
+            {!user && (                                                     /* ⬅️ แจ้งเตือนถ้ายังไม่ล็อกอิน */
+              <div className="mb-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                กรุณาเข้าสู่ระบบก่อนดำเนินการชำระเงิน
+              </div>
+            )}
+
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span>จำนวนสินค้า</span>
@@ -195,12 +215,14 @@ export default function CartPage() {
               </div>
             </div>
 
-            <Link
-              to="/checkout"
+            {/* ปุ่มชำระเงินที่เช็กล็อกอินก่อน */}
+            <button
+              type="button"
+              onClick={handleCheckout}
               className="w-full mt-5 h-12 rounded-xl bg-neutral-900 text-white font-semibold hover:-translate-y-0.5 active:translate-y-0 transition grid place-items-center"
             >
               ชำระเงิน
-            </Link>
+            </button>
 
             <p className="mt-3 text-xs text-neutral-500">
               ดำเนินการชำระเงินเพื่อยืนยันคำสั่งซื้อของคุณ

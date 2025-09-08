@@ -6,15 +6,36 @@ const CartContext = createContext();
 /* ---------- Utils ---------- */
 const normId = (v) => String(v ?? '');
 const normSize = (v) => (v == null ? null : String(v));
+const toNumFinite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+
 const clampQty = (qty, maxStock) => {
   const max = Number.isFinite(maxStock) ? Math.max(0, Number(maxStock)) : Infinity;
   return Math.max(1, Math.min(Number(qty) || 1, max));
 };
-const getStorageKey = (user) => `cart:${String(user?.id ?? user?.user_id ?? user?.email ?? 'guest')}`;
+
 const safeParse = (json, fb = []) => { try { return json ? JSON.parse(json) : fb; } catch { return fb; } };
 
-// รวมตะกร้าตาม id+size แล้วบวก qty
-function mergeCarts(a = [], b = []) {
+const readCart = (key) => {
+  const raw = localStorage.getItem(key);
+  return safeParse(raw, []).map(it => {
+    const qty = Number(it.qty || 1);
+    const parsedMax = toNumFinite(it.maxStock);
+    return {
+      ...it,
+      id: normId(it.id),
+      size: normSize(it.size),
+      price: Number(it.price || 0),
+      qty,
+      maxStock: parsedMax ?? Infinity,
+    };
+  });
+};
+
+const writeCart = (key, arr) => {
+  localStorage.setItem(key, JSON.stringify(arr));
+};
+
+const mergeCarts = (a = [], b = []) => {
   const map = new Map();
   [...a, ...b].forEach(it => {
     const id = normId(it.id);
@@ -24,80 +45,112 @@ function mergeCarts(a = [], b = []) {
     map.set(key, { ...prev, qty: (prev.qty || 0) + (Number(it.qty) || 1) });
   });
   return [...map.values()];
-}
+};
 
 /* ---------- Provider ---------- */
 export function CartProvider({ children }) {
   const { user } = useAuth();
-  const storageKey = useMemo(() => getStorageKey(user), [user]);
 
-  const [cart, setCart] = useState(() => {
-    const raw = localStorage.getItem(storageKey);
-    return safeParse(raw, []).map(it => {
-      const qty = Number(it.qty || 1);
-      const parsedMax = Number.isFinite(it.maxStock) ? Number(it.maxStock) : undefined;
-      return {
-        ...it,
-        id: normId(it.id),
-        size: normSize(it.size),
-        price: Number(it.price || 0),
-        qty,
-        // ★ ถ้าไม่มี maxStock เดิม ให้ล็อกไว้เท่ากับ qty ปัจจุบัน
-        maxStock: parsedMax ?? qty,
-      };
-    });
-  });
+  // ให้ userKey ต่อเมื่อมี id/user_id/email เท่านั้น
+  const userKey = useMemo(() => {
+    const ukey = user?.id ?? user?.user_id ?? user?.email;
+    return ukey ? String(ukey) : null;
+  }, [user]);
 
-  const mergedOnceRef = useRef(false);
+  // เริ่มจาก guest; จะถูก hydrate/merge ภายหลัง
+  const [cart, setCart] = useState(() => readCart('cart:guest'));
+
+  // กัน writer เขียนก่อน hydrate เสร็จ
+  const [hydrated, setHydrated] = useState(false);
+
+  // จำคีย์ก่อนหน้า และกัน merge ซ้ำ
+  const lastUserKeyRef = useRef(userKey);
+  const mergedForKeyRef = useRef(null);
 
   useEffect(() => {
-    const raw = localStorage.getItem(storageKey);
-    const next = safeParse(raw, []).map(it => {
-      const qty = Number(it.qty || 1);
-      const parsedMax = Number.isFinite(it.maxStock) ? Number(it.maxStock) : undefined;
-      return {
-        ...it,
-        id: normId(it.id),
-        size: normSize(it.size),
-        price: Number(it.price || 0),
-        qty,
-        // ★ migration เช่นเดียวกันตอนรีโหลด
-        maxStock: parsedMax ?? qty,
-      };
-    });
+    const prevKey = lastUserKeyRef.current; // null = guest เดิม
+    const currKey = userKey;                // null = guest ใหม่
 
-    // one-time merge: guest -> user
-    if (!mergedOnceRef.current) {
-      const rawGuest = localStorage.getItem('cart:guest');
-      const guestCart = safeParse(rawGuest, []).map(it => {
-        const qty = Number(it.qty || 1);
-        const parsedMax = Number.isFinite(it.maxStock) ? Number(it.maxStock) : undefined;
-        return {
-          ...it,
-          id: normId(it.id),
-          size: normSize(it.size),
-          price: Number(it.price || 0),
-          qty,
-          // ★ migration สำหรับ guest
-          maxStock: parsedMax ?? qty,
-        };
-      });
-      if (user && guestCart.length > 0) {
-        const merged = mergeCarts(next, guestCart);
-        localStorage.setItem(storageKey, JSON.stringify(merged));
+    // เริ่มรอบใหม่: ปิด writer ไว้ก่อน
+    setHydrated(false);
+
+    // 1) guest → user (ล็อกอิน)
+    if (prevKey === null && currKey !== null) {
+      const userCartStored  = readCart(`cart:${currKey}`);
+      const guestCartStored = readCart('cart:guest');
+      const merged = mergeCarts(userCartStored, guestCartStored);
+
+      writeCart(`cart:${currKey}`, merged);
+      // ✅ สำคัญ: ล้าง guest ทันที กันบวกซ้ำรอบถัดไป
+      localStorage.removeItem('cart:guest');
+
+      mergedForKeyRef.current = currKey;
+      setCart(merged);
+      lastUserKeyRef.current = currKey;
+      setHydrated(true);
+      return;
+    }
+
+    // 2) user → guest (ล็อกเอาต์)
+    if (prevKey !== null && currKey === null) {
+      // ✅ เคลียร์ guest cart ให้ว่าง เพื่อไม่เอามา merge รอบเข้าใหม่
+      writeCart('cart:guest', []);
+      setCart([]);
+      lastUserKeyRef.current = null;
+      mergedForKeyRef.current = null;
+      setHydrated(true);
+      return;
+    }
+
+    // 3) สลับบัญชี userA → userB
+    if (prevKey !== null && currKey !== null && prevKey !== currKey) {
+      // โหลดของ userB โดยไม่ merge กับ guest เพื่อกันรั่ว/ซ้ำ
+      const newUserCart = readCart(`cart:${currKey}`);
+      writeCart(`cart:${currKey}`, newUserCart);
+      // กันกรณี guest ค้างจากก่อนหน้า
+      localStorage.removeItem('cart:guest');
+
+      mergedForKeyRef.current = currKey;
+      setCart(newUserCart);
+      lastUserKeyRef.current = currKey;
+      setHydrated(true);
+      return;
+    }
+
+    // 4) คีย์ไม่เปลี่ยน
+    if (currKey === null) {
+      // guest: sync จาก storage
+      setCart(readCart('cart:guest'));
+    } else {
+      if (mergedForKeyRef.current !== currKey) {
+        // เข้าสู่หน้าแรกหลัง login: รวม storage ครั้งเดียวเพื่อความชัวร์
+        const userCartStored  = readCart(`cart:${currKey}`);
+        const guestCartStored = readCart('cart:guest');
+        const merged = mergeCarts(userCartStored, guestCartStored);
+        writeCart(`cart:${currKey}`, merged);
+        // ✅ ล้าง guest หลัง merge เพื่อกันบวกซ้ำ
         localStorage.removeItem('cart:guest');
-        mergedOnceRef.current = true;
+
+        mergedForKeyRef.current = currKey;
         setCart(merged);
-        return;
+      } else {
+        // sync user cart จาก storage
+        setCart(readCart(`cart:${currKey}`));
       }
     }
 
-    setCart(next);
-  }, [storageKey, user]);
+    lastUserKeyRef.current = currKey;
+    setHydrated(true);
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userKey]);
+
+  // เขียน state ลง storage ตามคีย์ปัจจุบันเสมอ (แต่เฉพาะหลัง hydrate)
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(cart));
-  }, [cart, storageKey]);
+    if (!hydrated) return; // ป้องกัน “เขียนทับเป็น []” ตอน userKey เพิ่งเปลี่ยน
+    const key = userKey ? `cart:${userKey}` : 'cart:guest';
+    writeCart(key, cart);
+  }, [cart, userKey, hydrated]);
 
   /* ---------- Helpers ---------- */
   const findIndexesById = (list, id) => {
@@ -113,30 +166,26 @@ export function CartProvider({ children }) {
   };
 
   /* ================= Mutations ================= */
-
   const addToCart = (item) => {
     const id = normId(item.id);
     const size = normSize(item.size);
     const price = Number(item.price || 0);
-    const qtyToAdd = Math.max(1, Number(item.qty || 1));
-    const incomingMax = Number.isFinite(item.maxStock) ? Number(item.maxStock) : undefined;
+    const qtyToAdd = Math.max(1, Number(item.qty) || 1);
+    const incomingMax = toNumFinite(item.maxStock);
 
     setCart(prev => {
       const idx = findIndexByIdSize(prev, id, size);
       if (idx === -1) {
-        // ★ ถ้าไม่ส่ง maxStock มา ให้ตั้งลิมิตอย่างน้อยเป็น qtyToAdd (กันไม่ให้โตจาก 1 แบบไร้ลิมิต)
-        const initMax = incomingMax ?? qtyToAdd;
+        const initMax = incomingMax ?? Infinity;
         return [...prev, { ...item, id, size, price, qty: clampQty(qtyToAdd, initMax), maxStock: initMax }];
       }
       const copy = [...prev];
       const old = copy[idx];
 
-      // ★ newMax: ใช้ค่าที่ส่งมา ถ้าไม่ส่งมาและของเดิมก็ไม่มี ให้ล็อกไว้เท่ากับ qty ปัจจุบัน
       const newMax = Number.isFinite(incomingMax)
         ? incomingMax
-        : (Number.isFinite(old.maxStock) ? old.maxStock : Math.max(1, Number(old.qty) || 1));
+        : (Number.isFinite(old.maxStock) ? old.maxStock : Infinity);
 
-      // ★ ถ้าถึงลิมิตแล้ว ไม่เพิ่มซ้ำ
       if ((Number(old.qty) || 0) >= newMax) {
         copy[idx] = { ...old, maxStock: newMax };
         return copy;
@@ -203,7 +252,10 @@ export function CartProvider({ children }) {
   const clearCart = () => setCart([]);
 
   const totalQty = useMemo(() => cart.reduce((s, i) => s + (Number(i.qty) || 0), 0), [cart]);
-  const totalPrice = useMemo(() => cart.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0), [cart]);
+  const totalPrice = useMemo(
+    () => cart.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 1), 0),
+    [cart]
+  );
 
   return (
     <CartContext.Provider value={{

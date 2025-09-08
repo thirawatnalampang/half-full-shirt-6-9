@@ -1208,6 +1208,79 @@ app.get('/api/admin/metrics/recent-orders', async (req, res) => {
   }
 });
 
+
+app.get('/api/products/search', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const qRaw  = String(req.query.q || '').trim();
+    const page  = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '24', 10)));
+    const sort  = String(req.query.sort || 'relevance');
+
+    if (!qRaw) return res.json({ items: [], total: 0, page, limit });
+
+    const likeFull  = `%${qRaw}%`;
+    const likeFront = `${qRaw}%`;
+    const offset    = (page - 1) * limit;
+
+    let orderBy = '';
+    switch (sort) {
+      case 'newest':     orderBy = 'p.created_at DESC NULLS LAST'; break;
+      case 'price_asc':  orderBy = 'p.price ASC NULLS LAST'; break;
+      case 'price_desc': orderBy = 'p.price DESC NULLS LAST'; break;
+      case 'name_asc':   orderBy = 'p.name ASC NULLS LAST'; break;
+      default:
+        orderBy = `
+          CASE
+            WHEN p.name ILIKE $2 THEN 0
+            WHEN p.name ILIKE $1 THEN 1
+            ELSE 2
+          END,
+          p.name ASC
+        `;
+    }
+
+    const where = `
+      (COALESCE(p.name,'') ILIKE $1 OR
+       COALESCE(p.description,'') ILIKE $1 OR
+       COALESCE(c.name,'') ILIKE $1)
+    `;
+
+    const countSql = `
+      SELECT COUNT(*)::int AS cnt
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE ${where}
+    `;
+    const countRes = await client.query(countSql, [likeFull]);
+    const total = Number(countRes.rows?.[0]?.cnt || 0);
+
+    const listSql = `
+      SELECT
+        p.id   AS product_id,
+        p.name,
+        p.price,
+        p.image AS image,
+        c.name AS category_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE ${where}
+      ORDER BY ${orderBy}
+      LIMIT $3 OFFSET $4
+    `;
+    const listParams = [likeFull, likeFront, limit, offset];
+    const listRes = await client.query(listSql, listParams);
+
+    res.json({ items: listRes.rows, total, page, limit });
+  } catch (err) {
+    console.error('search error:', err);
+    res.status(500).json({ error: 'search_failed' });
+  } finally {
+    client.release();
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);
 });

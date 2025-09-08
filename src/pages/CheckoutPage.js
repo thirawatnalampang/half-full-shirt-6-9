@@ -319,7 +319,7 @@ export default function CheckoutPage() {
               <label className="flex items-center gap-3">
                 <input type="radio" name="pay" value="transfer"
                   checked={paymentMethod === 'transfer'} onChange={() => setPaymentMethod('transfer')} />
-                <span>โอนผ่านธนาคาร4595458995959595 กสิกร/พร้อมเพย์ 0988405158</span>
+                <span>โอนผ่านธนาคาร4595458995959595 กสิกร/พร้อมเพย์ 098-840-5158</span>
               </label>
             </div>
 
