@@ -380,7 +380,33 @@ app.put('/api/profile', async (req, res) => {
 });
 
 
+// ==================== CATEGORIES CRUD ====================
+app.get('/api/admin/categories', async (req, res) => {
+  try {
+    const q = `SELECT id, name FROM categories ORDER BY id ASC`;
+    const result = await pool.query(q);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET /categories error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
+app.post('/api/admin/categories', async (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ message: 'กรุณากรอกชื่อหมวดหมู่' });
+
+  try {
+    const result = await pool.query(
+      'INSERT INTO categories (name) VALUES ($1) RETURNING *',
+      [name.trim()]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST /categories error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 
 // ==================== PRODUCTS CRUD ====================
