@@ -1,9 +1,9 @@
 // src/pages/admin/AdminPage.jsx
-import React, { useState, useEffect, useMemo } from "react";
+import React, {  useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import {
-  FaTshirt, FaTags, FaShoppingBag, FaUsers,
+  FaTshirt, FaShoppingBag, FaUsers,
   FaPlus, FaSearch, FaEdit, FaTrash, FaSave, FaTimes, FaHome,
   FaChartLine, FaBars,   // ⬅️ เพิ่ม FaBars
 } from "react-icons/fa";
@@ -50,7 +50,6 @@ function TopBar({ title, onMenu }) {
 
 const menu = [
   { key: "products", label: "สินค้า",     icon: <FaTshirt /> },
-  { key: "categories", label: "หมวดหมู่", icon: <FaTags /> },
   { key: "orders", label: "ออเดอร์",     icon: <FaShoppingBag /> },
   { key: "users", label: "ผู้ใช้",        icon: <FaUsers /> },
   { key: "dashboard", label: "แดชบอร์ด", icon: <FaChartLine /> },
@@ -402,15 +401,6 @@ function ProductsPanel() {
     </div>
   );
 }
-
-
-// Placeholder panels
-function CategoriesPanel() { return <div className="p-6 text-neutral-300">TODO: CRUD หมวดหมู่</div>; }
-
-
-
-
-
 
 
 
@@ -1414,7 +1404,109 @@ function DashboardPanel() {
   );
 }
 
-function UsersPanel() { return <div className="p-6 text-neutral-300">TODO: ตารางผู้ใช้</div>; }
+function UsersPanel() {
+  const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:3000";
+
+  const [users, setUsers] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+
+  const loadUsers = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      setErr(null);
+      const res = await fetch(`${API_BASE}/api/admin/users`);
+      if (!res.ok) throw new Error("โหลดข้อมูลผู้ใช้ไม่สำเร็จ");
+      const data = await res.json();
+      setUsers(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+      setErr(e.message || "เกิดข้อผิดพลาด");
+    } finally {
+      setLoading(false);
+    }
+  }, [API_BASE]);
+
+  React.useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
+
+  async function handleDelete(id) {
+    if (!window.confirm("ยืนยันลบผู้ใช้นี้?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("ลบไม่สำเร็จ");
+      setUsers((prev) => prev.filter((u) => u.id !== id));
+    } catch (e) {
+      alert("เกิดข้อผิดพลาด: " + (e.message || "ลบไม่สำเร็จ"));
+    }
+  }
+
+  return (
+    <div className="p-6 text-neutral-300">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-xl font-bold">📋 ตารางผู้ใช้</h2>
+        <button
+          onClick={loadUsers}
+          className="px-3 py-1 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-sm"
+        >
+          รีเฟรช
+        </button>
+      </div>
+
+      {loading && <p className="text-neutral-400">⏳ กำลังโหลดข้อมูล...</p>}
+      {err && <p className="text-red-400">❌ {err}</p>}
+
+      {!loading && !err && (
+        <div className="overflow-x-auto rounded-xl shadow">
+          <table className="w-full text-left border-collapse">
+            <thead className="bg-neutral-800 text-neutral-200">
+              <tr>
+                <th className="px-4 py-2">ID</th>
+                <th className="px-4 py-2">ชื่อผู้ใช้</th>
+                <th className="px-4 py-2">อีเมล</th>
+                <th className="px-4 py-2">เบอร์โทร</th>
+                <th className="px-4 py-2">บทบาท</th>
+                <th className="px-4 py-2 text-center">การจัดการ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.length ? (
+                users.map((u) => (
+                  <tr key={u.id} className="border-b border-neutral-700 hover:bg-neutral-800">
+                    <td className="px-4 py-2">{u.id}</td>
+                    <td className="px-4 py-2">{u.username}</td>
+                    <td className="px-4 py-2">{u.email}</td>
+                    <td className="px-4 py-2">{u.phone || "-"}</td>
+                    <td className="px-4 py-2">
+                      <span className="px-2 py-1 rounded-full text-sm bg-yellow-800 text-yellow-200">
+                        {u.role}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 text-center">
+                      <button
+                        onClick={() => handleDelete(u.id)}
+                        className="px-3 py-1 rounded-lg bg-red-700 text-white hover:bg-red-600 text-sm"
+                      >
+                        ลบ
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="6" className="text-center py-6 text-neutral-500">
+                    ไม่พบข้อมูลผู้ใช้
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 /* -------------------- AdminPage (รวมทั้งหมด + mobile drawer) -------------------- */
 export default function AdminPage() {
   const navigate = useNavigate();
@@ -1446,7 +1538,6 @@ export default function AdminPage() {
         />
         <main className="flex-1 min-w-0 md:ml-0">
           {active === "products" && <ProductsPanel />}
-          {active === "categories" && <CategoriesPanel />}
           {active === "orders" && <OrdersPanel />}
           {active === "users" && <UsersPanel />}
           {active === "dashboard" && <DashboardPanel />}

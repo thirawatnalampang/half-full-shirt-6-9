@@ -255,13 +255,13 @@ export default function CheckoutPage() {
                   className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
               </div>
               <div className="md:col-span-2">
-                <label className="block text-sm mb-1">ที่อยู่ *</label>
+                <label className="block text-sm mb-1">ที่อยู่ ตำบล*</label>
                 <textarea name="addressLine" value={form.addressLine} onChange={onChange} rows={3}
                   placeholder="บ้านเลขที่ / หมู่บ้าน / ถนน"
                   className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
               </div>
               <div>
-                <label className="block text-sm mb-1">ตำบล/แขวง *</label>
+                <label className="block text-sm mb-1">อำเภอ *</label>
                 <input name="district" value={form.district} onChange={onChange}
                   className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
               </div>
@@ -334,7 +334,7 @@ export default function CheckoutPage() {
                   <input
                     value={slipAmount}
                     onChange={(e) => setSlipAmount(e.target.value)}
-                    placeholder="เช่น 850.00"
+                    placeholder=""
                     className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
                   />
                 </div>

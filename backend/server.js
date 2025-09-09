@@ -379,33 +379,9 @@ app.put('/api/profile', async (req, res) => {
   }
 });
 
-// ==================== CATEGORIES CRUD ====================
-app.get('/api/admin/categories', async (req, res) => {
-  try {
-    const q = `SELECT id, name FROM categories ORDER BY id ASC`;
-    const result = await pool.query(q);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('GET /categories error:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
 
-app.post('/api/admin/categories', async (req, res) => {
-  const { name } = req.body;
-  if (!name?.trim()) return res.status(400).json({ message: 'กรุณากรอกชื่อหมวดหมู่' });
 
-  try {
-    const result = await pool.query(
-      'INSERT INTO categories (name) VALUES ($1) RETURNING *',
-      [name.trim()]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error('POST /categories error:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+
 
 // ==================== PRODUCTS CRUD ====================
 app.get('/api/admin/products', async (req, res) => {
@@ -1272,6 +1248,99 @@ app.get('/api/products/search', async (req, res) => {
     res.status(500).json({ error: 'search_failed' });
   } finally {
     client.release();
+  }
+});
+
+// ==================== USERS API ====================
+
+// GET: ดึงผู้ใช้ทั้งหมด
+app.get("/api/admin/users", async (req, res) => {
+  try {
+    const q = `
+      SELECT id, username, email, role, phone, address, profile_image, email_verified, created_at
+      FROM users
+      ORDER BY id ASC
+    `;
+    const result = await pool.query(q);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET /users error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET: ผู้ใช้ตาม id
+app.get("/api/admin/users/:id", async (req, res) => {
+  try {
+    const q = `
+      SELECT id, username, email, role, phone, address, profile_image, email_verified, created_at
+      FROM users WHERE id = $1
+    `;
+    const result = await pool.query(q, [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("GET /users/:id error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// POST: สร้างผู้ใช้ใหม่
+app.post("/api/admin/users", async (req, res) => {
+  try {
+    const { username, password, email, role, phone, address } = req.body;
+    if (!username || !password || !email) {
+      return res.status(400).json({ message: "username, password, email required" });
+    }
+
+    const q = `
+      INSERT INTO users (username, password, email, role, phone, address, created_at, email_verified)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW(), false)
+      RETURNING id, username, email, role, phone, address, created_at, email_verified
+    `;
+    const result = await pool.query(q, [username, password, email, role || "user", phone, address]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("POST /users error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// PUT: อัปเดตผู้ใช้
+app.put("/api/admin/users/:id", async (req, res) => {
+  try {
+    const { username, email, role, phone, address, profile_image, email_verified } = req.body;
+    const q = `
+      UPDATE users
+      SET username = COALESCE($1, username),
+          email = COALESCE($2, email),
+          role = COALESCE($3, role),
+          phone = COALESCE($4, phone),
+          address = COALESCE($5, address),
+          profile_image = COALESCE($6, profile_image),
+          email_verified = COALESCE($7, email_verified)
+      WHERE id = $8
+      RETURNING id, username, email, role, phone, address, profile_image, email_verified, created_at
+    `;
+    const result = await pool.query(q, [username, email, role, phone, address, profile_image, email_verified, req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("PUT /users/:id error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// DELETE: ลบผู้ใช้
+app.delete("/api/admin/users/:id", async (req, res) => {
+  try {
+    const q = "DELETE FROM users WHERE id = $1 RETURNING id";
+    const result = await pool.query(q, [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+    res.json({ message: "User deleted", id: result.rows[0].id });
+  } catch (err) {
+    console.error("DELETE /users/:id error:", err);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
