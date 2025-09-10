@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useCart } from "../context/CartContext";
 
-const DEFAULT_SIZES = ["XS", "S", "M", "L", "XL", "2XL", "3XL"];
 const API_BASE = "http://localhost:3000";
 
 export default function ProductDetail() {
@@ -13,7 +12,7 @@ export default function ProductDetail() {
 
   const [product, setProduct] = useState(null);
   const [added, setAdded] = useState(false);
-  const [size, setSize] = useState(null);
+  const [selectedKey, setSelectedKey] = useState(null);
   const [qty, setQty] = useState(1);
 
   // โหลดสินค้า
@@ -31,79 +30,70 @@ export default function ProductDetail() {
     loadProduct();
   }, [productId]);
 
-  // รวมไซส์
-  const sizes = useMemo(() => {
-    if (!product) return DEFAULT_SIZES;
-    const fromProduct =
-      product?.sizes ||
-      product?.sizeOptions ||
-      product?.options?.sizes ||
-      (Array.isArray(product?.variants)
-        ? product.variants.map((v) => v?.size).filter(Boolean)
-        : []);
-    const list = Array.from(new Set((fromProduct || []).filter(Boolean))).map(String);
-    return list.length > 0 ? list : DEFAULT_SIZES;
-  }, [product]);
-
-  // stock ต่อไซส์
-  const stockBySize = useMemo(() => {
-    if (!product) return {};
-    if (product?.stockBySize && typeof product.stockBySize === "object") {
-      const out = {};
-      for (const k of Object.keys(product.stockBySize)) {
-        out[String(k)] = Number(product.stockBySize[k] ?? 0);
+  /** ---------------- Normalizers: อก/ยาว + stock ---------------- */
+  const measureVariants = useMemo(() => {
+    if (!product) return [];
+    let mv = product?.measure_variants ?? product?.measureVariants ?? null;
+    if (typeof mv === "string") {
+      try { mv = JSON.parse(mv); } catch { mv = null; }
+    }
+    const out = [];
+    if (Array.isArray(mv)) {
+      for (const v of mv) {
+        const chest = Number(v?.chest_cm ?? v?.chest ?? NaN);
+        const length = Number(v?.length_cm ?? v?.length ?? NaN);
+        const stock = Number(v?.stock ?? 0);
+        if (Number.isFinite(chest) && Number.isFinite(length)) {
+          const key = `c${chest}-l${length}`;
+          out.push({ key, chest, length, stock });
+        }
       }
-      return out;
     }
-    if (Array.isArray(product?.variants)) {
-      const map = {};
-      product.variants.forEach((v) => {
-        if (!v?.size) return;
-        const key = String(v.size);
-        map[key] = (map[key] || 0) + Number(v?.stock ?? 0);
-      });
-      if (Object.keys(map).length > 0) return map;
+    const best = new Map();
+    for (const v of out) {
+      const prev = best.get(v.key);
+      if (!prev || Number(v.stock) > Number(prev.stock)) best.set(v.key, v);
     }
-    return {};
+    return Array.from(best.values()).sort((a, b) =>
+      a.chest !== b.chest ? a.chest - b.chest : a.length - b.length
+    );
   }, [product]);
 
-  // stock รวม
+  const stockByKey = useMemo(() => {
+    const o = {};
+    for (const v of measureVariants) o[v.key] = Number(v.stock ?? 0);
+    return o;
+  }, [measureVariants]);
+
   const totalStock = useMemo(() => {
-    if (!product) return undefined;
-    if (Object.keys(stockBySize).length > 0) {
-      return Object.values(stockBySize).reduce((a, b) => a + Number(b || 0), 0);
+    if (measureVariants.length > 0) {
+      return measureVariants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
     }
     if (typeof product?.stock === "number") return Number(product.stock);
     return undefined;
-  }, [stockBySize, product]);
+  }, [measureVariants, product]);
 
   const isAllOut = totalStock === 0;
+  const hasStockForKey = (k) => Number(stockByKey[k] || 0) > 0;
 
-  // check stock ของไซส์
-  const hasStockFor = (s) => {
-    if (Object.keys(stockBySize).length > 0) return Number(stockBySize[s] || 0) > 0;
-    if (typeof totalStock === "number") return totalStock > 0;
-    return true;
-  };
-
-  // จำนวนสูงสุด
   const maxQty = useMemo(() => {
-    if (!size) return 99;
-    if (Object.keys(stockBySize).length > 0) return Math.max(0, Number(stockBySize[size] || 0));
+    if (!selectedKey) return 99;
+    if (Object.keys(stockByKey).length > 0)
+      return Math.max(0, Number(stockByKey[selectedKey] || 0));
     if (typeof totalStock === "number") return Math.max(0, totalStock);
     return 99;
-  }, [size, stockBySize, totalStock]);
+  }, [selectedKey, stockByKey, totalStock]);
 
-  // limit qty ถ้าเกิน stock
   useEffect(() => {
     setQty((q) => Math.min(Math.max(1, q), Math.max(1, maxQty)));
   }, [maxQty]);
 
   const handleAdd = () => {
-    if (!product) return;
-    if (isAllOut) return;
-    if (!size) return;
-    if (!hasStockFor(size)) return;
+    if (!product || isAllOut || !selectedKey || !hasStockForKey(selectedKey)) return;
+    const chosen = measureVariants.find((m) => m.key === selectedKey);
+    const sizeLabel = chosen
+      ? `อก ${chosen.chest}″ / ยาว ${chosen.length}″ นิ้ว`
+      : null;
 
     addToCart({
       id: product.id,
@@ -111,8 +101,11 @@ export default function ProductDetail() {
       image: product.image ? `${API_BASE}${product.image}` : "/assets/placeholder.png",
       price: product.price,
       qty,
-      size,
+      size: sizeLabel,
+      measures: chosen ? { chest_cm: chosen.chest, length_cm: chosen.length } : null,
+      variantKey: selectedKey,
     });
+
     setAdded(true);
     setTimeout(() => setAdded(false), 1200);
   };
@@ -155,76 +148,65 @@ export default function ProductDetail() {
           {product.description || "ไม่มีรายละเอียดสินค้า"}
         </p>
 
-        {/* เลือกไซส์ */}
+        {/* เลือก อก/ยาว */}
         <div className="mb-6">
-          <h3 className="text-sm font-medium text-gray-600 mb-2">Size:</h3>
-          <div className="flex gap-2 flex-wrap">
-            {sizes.map((s) => {
-              const active = size === s;
-              const inStock = hasStockFor(s);
-              return (
-                <button
-                  key={s}
-                  onClick={() => inStock && setSize(s)}
-                  disabled={!inStock}
-                  className={`px-4 py-2 border rounded-lg transition
-                    ${active ? "bg-black text-white border-black" : ""}
-                    ${
+          <h3 className="text-sm font-medium text-gray-600 mb-2">เลือกขนาด (อก/ยาว) นิ้ว:</h3>
+          {measureVariants.length === 0 ? (
+            <p className="text-sm text-gray-500">ยังไม่มีข้อมูล “อก/ยาว” สำหรับสินค้านี้</p>
+          ) : (
+            <div className="flex gap-2 flex-wrap">
+              {measureVariants.map((m) => {
+                const active = selectedKey === m.key;
+                const inStock = hasStockForKey(m.key);
+                const label = `อก ${m.chest}″ / ยาว ${m.length}″ นิ้ว`;
+                return (
+                  <button
+                    key={m.key}
+                    onClick={() => inStock && setSelectedKey(m.key)}
+                    disabled={!inStock}
+                    className={[
+                      "px-3 py-2 border rounded-lg transition text-sm",
+                      active ? "bg-black text-white border-black" : "",
                       inStock && !active
                         ? "bg-white text-gray-700 hover:bg-gray-100"
                         : !inStock
                         ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                         : ""
-                    }`}
-                >
-                  {s} {!inStock && "(หมด)"}
-                </button>
-              );
-            })}
-          </div>
+                    ].join(" ")}
+                    title={inStock ? `เหลือ ${m.stock} ชิ้น` : "หมด"}
+                  >
+                    {label} {!inStock && "(หมด)"}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Quantity (ปุ่มแบบกลุ่ม + เหลือ X ชิ้น) */}
+        {/* Quantity */}
         <div className="mb-8">
-          <h3 className="text-sm font-semibold text-gray-800 mb-2">Quantity:</h3>
-
-          {/* กล่องรวมปุ่ม */}
-          <div
-            className={[
-              "inline-flex items-center rounded-xl border border-gray-300 bg-white",
-              "shadow-sm overflow-hidden"
-            ].join(" ")}
-          >
+          <h3 className="text-sm font-semibold text-gray-800 mb-2">จำนวน:</h3>
+          <div className="inline-flex items-center rounded-xl border border-gray-300 bg-white shadow-sm overflow-hidden">
             <button
               onClick={() => setQty((q) => Math.max(1, q - 1))}
               disabled={isAllOut || maxQty <= 0}
               className={[
-                "w-9 h-9 flex items-center justify-center",
-                "text-base font-bold leading-none",
+                "w-9 h-9 flex items-center justify-center text-base font-bold leading-none",
                 "hover:bg-gray-50 active:scale-95 transition",
-                isAllOut || maxQty <= 0
-                  ? "text-gray-400 cursor-not-allowed"
-                  : "text-gray-800"
+                isAllOut || maxQty <= 0 ? "text-gray-400 cursor-not-allowed" : "text-gray-800"
               ].join(" ")}
               aria-label="ลดจำนวน"
             >
               −
             </button>
-
-            <span className="px-3 text-base font-medium tabular-nums select-none">
-              {qty}
-            </span>
-
+            <span className="px-3 text-base font-medium tabular-nums select-none">{qty}</span>
             <button
               onClick={() => setQty((q) => Math.min(q + 1, maxQty))}
               disabled={isAllOut || qty >= maxQty}
               className={[
-                "w-9 h-9 flex items-center justify-center",
-                "text-base font-bold leading-none",
+                "w-9 h-9 flex items-center justify-center text-base font-bold leading-none",
                 "hover:bg-gray-50 active:scale-95 transition",
-                isAllOut || qty >= maxQty
-                  ? "text-gray-400 cursor-not-allowed"
-                  : "text-gray-800"
+                isAllOut || qty >= maxQty ? "text-gray-400 cursor-not-allowed" : "text-gray-800"
               ].join(" ")}
               aria-label="เพิ่มจำนวน"
               title={Number.isFinite(maxQty) ? `เหลือ ${maxQty} ชิ้น` : undefined}
@@ -232,17 +214,11 @@ export default function ProductDetail() {
               +
             </button>
           </div>
-
-          {/* แสดงจำนวนคงเหลือใต้ปุ่ม */}
-          {size && Number.isFinite(maxQty) && (
+          {selectedKey && Number.isFinite(maxQty) && (
             <p
               className={[
                 "mt-2 text-sm font-semibold",
-                maxQty === 0
-                  ? "text-red-600"
-                  : maxQty <= 5
-                  ? "text-orange-500"
-                  : "text-emerald-600",
+                maxQty === 0 ? "text-red-600" : maxQty <= 5 ? "text-orange-500" : "text-emerald-600",
               ].join(" ")}
             >
               เหลือ {maxQty} ชิ้น
@@ -254,15 +230,13 @@ export default function ProductDetail() {
         <button
           type="button"
           onClick={handleAdd}
-          disabled={isAllOut || !size}
+          disabled={isAllOut || !selectedKey}
           className={`w-full font-medium py-3 px-6 rounded-lg shadow transition
-            ${
-              isAllOut || !size
-                ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-                : "bg-black hover:bg-gray-800 text-white"
-            }`}
+            ${isAllOut || !selectedKey
+              ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+              : "bg-black hover:bg-gray-800 text-white"}`}
         >
-          {isAllOut ? "สินค้าหมด" : !size ? "เลือกไซส์ก่อน" : "เพิ่มไปตะกร้า"}
+          {isAllOut ? "สินค้าหมด" : !selectedKey ? "เลือก อก/ยาว ก่อน" : "เพิ่มไปตะกร้า"}
         </button>
 
         {/* Toast */}

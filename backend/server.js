@@ -378,7 +378,37 @@ app.put('/api/profile', async (req, res) => {
     res.status(500).json({ message: 'เกิดข้อผิดพลาดในการบันทึกข้อมูลโปรไฟล์' });
   }
 });
+// ===== helpers: measure variants (อก/ยาว) =====
+function parseMeasureVariants(input) {
+  let mv = input;
+  if (!mv) return [];
+  if (typeof mv === "string") {           // มาจาก multipart/form-data จะเป็นสตริง
+    try { mv = JSON.parse(mv); } catch { mv = null; }
+  }
+  if (!Array.isArray(mv)) return [];
 
+  // ทำให้เป็นตัวเลข และกรองรายการที่ไม่ครบ
+  const cleaned = mv.map(v => ({
+    chest_cm: Number(v?.chest_cm ?? v?.chest),
+    length_cm: Number(v?.length_cm ?? v?.length),
+    stock: Number(v?.stock ?? 0),
+  })).filter(v => Number.isFinite(v.chest_cm) && Number.isFinite(v.length_cm));
+
+  // รวมแถวที่อก/ยาวซ้ำกัน (กันสต๊อกซ้ำ)
+  const agg = new Map(); // key: c{chest}-l{length}
+  for (const v of cleaned) {
+    const key = `c${v.chest_cm}-l${v.length_cm}`;
+    agg.set(key, (agg.get(key) || 0) + (v.stock || 0));
+  }
+  return Array.from(agg.entries()).map(([key, stock]) => {
+    const [cStr, lStr] = key.replace(/^c/, "").split("-l");
+    return { chest_cm: Number(cStr), length_cm: Number(lStr), stock: Number(stock) };
+  });
+}
+
+function sumStockFromMeasures(mv = []) {
+  return (Array.isArray(mv) ? mv : []).reduce((a, b) => a + Number(b?.stock || 0), 0);
+}
 
 // ==================== CATEGORIES CRUD ====================
 app.get('/api/admin/categories', async (req, res) => {
@@ -413,8 +443,10 @@ app.post('/api/admin/categories', async (req, res) => {
 app.get('/api/admin/products', async (req, res) => {
   try {
     const q = `
-      SELECT id, name, price, stock, category_id, description, image, status, created_at, updated_at
-      FROM products ORDER BY id DESC
+      SELECT id, name, price, stock, category_id, description, image, status,
+             measure_variants, created_at, updated_at
+      FROM products
+      ORDER BY id DESC
     `;
     const result = await pool.query(q);
     return res.status(200).json(result.rows);
@@ -431,20 +463,26 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
       return res.status(400).json({ message: 'ชื่อสินค้าเป็นค่าว่างไม่ได้' });
     }
 
+    // ✅ parse measureVariants (มาจากฟอร์มเป็น string JSON)
+    const mv = parseMeasureVariants(req.body.measureVariants);
+    // ถ้ามีรายการ อก/ยาว → ใช้ยอดรวมแทน stock ที่ส่งมา
+    const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : Number(stock) || 0;
+
     const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
 
     const q = `
-      INSERT INTO products (name, price, stock, category_id, description, image, status, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,'active',NOW(),NOW())
+      INSERT INTO products (name, price, stock, category_id, description, image, status, measure_variants, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,'active',$7,NOW(),NOW())
       RETURNING *
     `;
     const params = [
       name,
       Number(price) || 0,
-      Number(stock) || 0,
+      totalStock,
       category_id ? Number(category_id) : null,
       description || '',
       imagePath,
+      mv.length ? JSON.stringify(mv) : null,
     ];
     const result = await pool.query(q, params);
 
@@ -466,18 +504,25 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
 
     const imagePath = req.file ? `/uploads/${req.file.filename}` : (oldImage || null);
 
+    // ✅ parse & สรุป
+    const mv = parseMeasureVariants(req.body.measureVariants);
+    const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : Number(stock) || 0;
+
     const q = `
       UPDATE products
-      SET name=$1, price=$2, stock=$3, category_id=$4, description=$5, image=$6, updated_at=NOW()
-      WHERE id=$7 RETURNING *
+      SET name=$1, price=$2, stock=$3, category_id=$4, description=$5, image=$6,
+          measure_variants=$7, updated_at=NOW()
+      WHERE id=$8
+      RETURNING *
     `;
     const params = [
       name,
       Number(price) || 0,
-      Number(stock) || 0,
+      totalStock,
       category_id ? Number(category_id) : null,
       description || '',
       imagePath,
+      mv.length ? JSON.stringify(mv) : null,
       id,
     ];
     const result = await pool.query(q, params);
@@ -512,7 +557,7 @@ app.get('/api/products/by-category/:categoryId', async (req, res) => {
   try {
     const { categoryId } = req.params;
     const q = `
-      SELECT id, name, price, stock, description, image, category_id
+      SELECT id, name, price, stock, description, image, category_id, measure_variants
       FROM products
       WHERE category_id = $1
       ORDER BY id DESC
@@ -525,11 +570,12 @@ app.get('/api/products/by-category/:categoryId', async (req, res) => {
   }
 });
 
+
 app.get('/api/admin/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const q = `
-      SELECT id, name, price, stock, description, image, category_id
+      SELECT id, name, price, stock, description, image, category_id, measure_variants
       FROM products
       WHERE id = $1
     `;
@@ -546,6 +592,7 @@ app.get('/api/admin/products/:id', async (req, res) => {
 
 
 
+
 // ===== util =====
 const crypto = require('crypto');
 
@@ -558,11 +605,40 @@ function genOrderCode() {
   const pad = (n) => String(n).padStart(2, '0');
   return `OD-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
-/* ====================== PUBLIC: สร้างคำสั่งซื้อ ====================== */
+
+// ใช้หน่วยนิ้วเป็นหลัก (รองรับข้อมูลเก่าที่เป็น *_cm)
+function parseMeasureVariants(input) {
+  let mv = input;
+  if (!mv) return [];
+  if (typeof mv === 'string') {
+    try { mv = JSON.parse(mv); } catch { mv = null; }
+  }
+  if (!Array.isArray(mv)) return [];
+  return mv
+    .map(v => ({
+      chest_in:  Number(v?.chest_in  ?? v?.chest  ?? v?.chest_cm),
+      length_in: Number(v?.length_in ?? v?.length ?? v?.length_cm),
+      stock:     Number(v?.stock ?? 0),
+    }))
+    .filter(v => Number.isFinite(v.chest_in) && Number.isFinite(v.length_in));
+}
+
+const mvKey = (c, l) => `c${Number(c)}-l${Number(l)}`;
+
+// กัน “นิ้ว นิ้ว”
+function cleanSizeLabel(s) {
+  if (!s) return s;
+  let out = String(s).trim();
+  out = out.replace(/\s*นิ้ว\s*นิ้ว\s*$/u, ' นิ้ว');
+  out = out.replace(/\s*นิ้ว\s*$/u, ' นิ้ว');
+  return out;
+}
+
+// ====================== PUBLIC: สร้างคำสั่งซื้อ (รองรับ อก/ยาว แบบนิ้ว) ======================
 app.post('/api/orders', async (req, res) => {
   const {
     userId, email,
-    items = [],
+    items = [],                 // [{ id, qty, size, variantKey, measures:{chest_in,length_in} }]
     shippingMethod, paymentMethod,
     address = {}, note = ''
   } = req.body || {};
@@ -582,9 +658,12 @@ app.post('/api/orders', async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      // lock แถวสินค้า
+      // lock สินค้า + measure_variants
       const prodRes = await client.query(
-        `SELECT id, name, price, stock, image FROM products WHERE id = ANY($1) FOR UPDATE`,
+        `SELECT id, name, price, stock, image, measure_variants
+           FROM products
+          WHERE id = ANY($1)
+          FOR UPDATE`,
         [ids]
       );
       const prodMap = new Map(prodRes.rows.map(r => [Number(r.id), r]));
@@ -593,6 +672,13 @@ app.post('/api/orders', async (req, res) => {
       let totalQty = 0;
       const orderItems = [];
 
+      const parseMV = (v) => {
+        if (!v) return [];
+        if (Array.isArray(v)) return v;
+        try { return JSON.parse(v); } catch { return []; }
+      };
+
+      // ตรวจสต็อก + สะสมยอด
       for (const it of items) {
         const pid = Number(it.id);
         const qty = Number(it.qty || 1);
@@ -600,79 +686,119 @@ app.post('/api/orders', async (req, res) => {
 
         const dbp = prodMap.get(pid);
         if (!dbp) throw new Error(`ไม่พบสินค้า id=${pid}`);
-        if (Number(dbp.stock || 0) < qty) {
-          throw new Error(`สต็อกไม่พอสำหรับ ${dbp.name} (คงเหลือ ${dbp.stock})`);
+
+        const mvArr = parseMV(dbp.measure_variants);
+        const unit = Number(dbp.price || 0);
+
+        // อ่านค่าที่ client ส่งมา (นิ้ว) — รองรับ payload เก่า *_cm
+        const chest  = Number(it?.measures?.chest_in  ?? it?.measures?.chest_cm  ?? NaN);
+        const length = Number(it?.measures?.length_in ?? it?.measures?.length_cm ?? NaN);
+
+        let picked = false;
+        if (Number.isFinite(chest) && Number.isFinite(length) && mvArr.length > 0) {
+          // หา variant อก/ยาว เท่ากัน (รองรับ key เก่า)
+          const idx = mvArr.findIndex(v =>
+            Number(v?.chest_in  ?? v?.chest  ?? v?.chest_cm)  === chest &&
+            Number(v?.length_in ?? v?.length ?? v?.length_cm) === length
+          );
+          if (idx === -1) {
+            throw new Error(`ไม่พบสต็อก อก ${chest} / ยาว ${length} ของสินค้า ${dbp.name}`);
+          }
+          const cur = Number(mvArr[idx]?.stock ?? 0);
+          if (cur < qty) {
+            throw new Error(`สต็อกไม่พอสำหรับ ${dbp.name} (อก ${chest} / ยาว ${length}) เหลือ ${cur}`);
+          }
+          // หักชั่วคราวในหน่วยความจำ
+          mvArr[idx].stock = cur - qty;
+          dbp.__mv_after = mvArr;
+          picked = true;
         }
 
-        const unit = Number(dbp.price || 0);
-        const line = unit * qty;
-        subtotal += line;
+        // ไม่แยกไซซ์ → ใช้สต็อกรวม
+        if (!picked) {
+          const left = Number(dbp.stock || 0);
+          if (left < qty) throw new Error(`สต็อกไม่พอสำหรับ ${dbp.name} (คงเหลือ ${left})`);
+          dbp.__stock_after = left - qty;
+        }
+
+        // label ไซซ์ (กัน “นิ้ว นิ้ว”)
+        let sizeLabel = null;
+        if (it.size && String(it.size).trim()) {
+          sizeLabel = cleanSizeLabel(it.size);
+        } else if (Number.isFinite(chest) && Number.isFinite(length)) {
+          sizeLabel = cleanSizeLabel(`อก ${chest} / ยาว ${length} นิ้ว`);
+        }
+
+        const lineTotal = unit * qty;
+        subtotal += lineTotal;
         totalQty += qty;
 
+        // เก็บไว้รอ insert order_items (ยังไม่ต้องมี order_id ตรงนี้)
         orderItems.push({
           product_id: pid,
           name: dbp.name,
-          size: it.size ?? null,
+          size: sizeLabel,
           unit_price: unit,
           qty,
-          line_total: line,
+          line_total: lineTotal,
           image: dbp.image || null,
+          variant_key: it.variantKey ?? null,
+          measures: (Number.isFinite(chest) && Number.isFinite(length))
+            ? { chest_in: chest, length_in: length }
+            : null,
         });
       }
 
-      // ค่าส่ง
+      // ค่าขนส่ง
       let shipping = 0;
       if (shippingMethod === 'express') shipping = SHIPPING_FEE_EXPRESS;
       else shipping = (subtotal === 0 || subtotal >= SHIPPING_THRESHOLD) ? 0 : SHIPPING_FEE_STANDARD;
 
       const total = subtotal + shipping;
-
-      // กำหนดสถานะการจ่ายเงินเริ่มต้นตามวิธีชำระ
       const paymentStatus = (paymentMethod === 'cod') ? 'unpaid' : 'submitted';
 
-      // insert order
+      // บันทึก orders
       const orderCode = genOrderCode();
-      const insertOrder = `
-        INSERT INTO orders
-          (order_code, user_id, email, full_name, phone, address_line, district, province, postcode,
-           shipping_method, payment_method, payment_status,
-           subtotal, shipping, total_price, total_qty, note, status, created_at)
-        VALUES
-          ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-           $10,$11,$12,
-           $13,$14,$15,$16,$17,'pending', NOW())
-        RETURNING id, order_code
-      `;
-      const paramsOrder = [
-        orderCode,
-        userId ?? null,
-        email ?? null,
-        address.fullName ?? null,
-        address.phone ?? null,
-        address.addressLine ?? null,
-        address.district ?? null,
-        address.province ?? null,
-        address.postcode ?? null,
-        shippingMethod,
-        paymentMethod,
-        paymentStatus,          // <<<<<<<<<< เพิ่มคอลัมน์นี้
-        subtotal,
-        shipping,
-        total,
-        totalQty,
-        note || ''
-      ];
-      const ordRes = await client.query(insertOrder, paramsOrder);
+      const ordRes = await client.query(
+        `INSERT INTO orders
+           (order_code, user_id, email, full_name, phone, address_line, district, province, postcode,
+            shipping_method, payment_method, payment_status,
+            subtotal, shipping, total_price, total_qty, note, status, created_at)
+         VALUES
+           ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+            $10,$11,$12,
+            $13,$14,$15,$16,$17,'pending', NOW())
+         RETURNING id, order_code`,
+        [
+          orderCode,
+          userId ?? null,
+          email ?? null,
+          address.fullName ?? null,
+          address.phone ?? null,
+          address.addressLine ?? null,
+          address.district ?? null,
+          address.province ?? null,
+          address.postcode ?? null,
+          shippingMethod,
+          paymentMethod,
+          paymentStatus,
+          subtotal,
+          shipping,
+          total,
+          totalQty,
+          note || ''
+        ]
+      );
       const orderId = ordRes.rows[0].id;
 
-      // insert order_items
+      // บันทึก order_items (ใส่ orderId ตรงนี้)
       const insertItem = `
         INSERT INTO order_items (
           order_id, product_id, name, size,
           unit_price, price_per_unit,
-          quantity, line_total, image
+          quantity, line_total, image, variant_key, measures
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
       `;
       for (const oi of orderItems) {
         await client.query(insertItem, [
@@ -684,16 +810,34 @@ app.post('/api/orders', async (req, res) => {
           oi.unit_price,
           oi.qty,
           oi.line_total,
-          oi.image
+          oi.image,
+          oi.variant_key,
+          oi.measures ? JSON.stringify(oi.measures) : null,
         ]);
       }
 
-      // หักสต็อก
-      for (const oi of orderItems) {
-        await client.query(
-          `UPDATE products SET stock = stock - $1, updated_at = NOW() WHERE id = $2`,
-          [oi.qty, oi.product_id]
-        );
+      // อัปเดตสต็อกจริงใน products
+      for (const pid of ids) {
+        const dbp = prodMap.get(pid);
+        if (dbp.__mv_after) {
+          const newJson = JSON.stringify(dbp.__mv_after);
+          const sumLeft = dbp.__mv_after.reduce((s, v) => s + Number(v?.stock || 0), 0);
+          await client.query(
+            `UPDATE products
+                SET measure_variants = $1,
+                    stock = $2,
+                    updated_at = NOW()
+              WHERE id = $3`,
+            [newJson, sumLeft, pid]
+          );
+        } else if (typeof dbp.__stock_after === 'number') {
+          await client.query(
+            `UPDATE products
+                SET stock = $1, updated_at = NOW()
+              WHERE id = $2`,
+            [dbp.__stock_after, pid]
+          );
+        }
       }
 
       await client.query('COMMIT');
@@ -710,6 +854,8 @@ app.post('/api/orders', async (req, res) => {
     return res.status(500).json({ message: 'สร้างคำสั่งซื้อไม่สำเร็จ' });
   }
 });
+
+
 
 // ================== 1) รายการออเดอร์ (สั้น) — รวมชำระเงิน + tracking ==================
 app.get("/api/admin/orders", async (req, res) => {

@@ -66,7 +66,7 @@ export default function CartPage() {
               const max = Number.isFinite(item.maxStock) ? Number(item.maxStock) : undefined;
               const lineTotal = price * qty;
               const atLimit = Number.isFinite(max) && qty >= max;
-              const itemKey = `${String(item.id)}::${item.size ?? ''}`;
+              const itemKey = `${String(item.id)}::${item.variantKey ?? item.size ?? ''}`;
 
               return (
                 <li
@@ -95,7 +95,7 @@ export default function CartPage() {
 
                         <button
                           type="button"
-                          onClick={() => removeFromCart(item.id, item.size)}
+                          onClick={() => removeFromCart(item.id, item.size, item.variantKey)}
                           className="text-red-600 hover:text-red-700 text-sm font-medium"
                           aria-label={`ลบ ${item.name} ออกจากตะกร้า`}
                         >
@@ -108,7 +108,7 @@ export default function CartPage() {
                         <div className="flex items-center rounded-xl border border-neutral-200 dark:border-neutral-700 overflow-hidden">
                           <button
                             type="button"
-                            onClick={() => decreaseQty(item.id, item.size, 1)}
+                            onClick={() => decreaseQty(item.id, item.size, 1, item.variantKey)}
                             className="px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
                             disabled={qty <= 1}
                             aria-label="ลดจำนวน"
@@ -124,14 +124,14 @@ export default function CartPage() {
                             value={qty}
                             onChange={(e) => {
                               const v = Math.max(1, Number(e.target.value) || 1);
-                              setQty(item.id, item.size, v);
+                              setQty(item.id, item.size, v, item.variantKey);
                             }}
                             aria-label="จำนวน"
                           />
 
                           <button
                             type="button"
-                            onClick={() => increaseQty(item.id, item.size, 1)}
+                            onClick={() => increaseQty(item.id, item.size, 1, item.variantKey)}
                             className="px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-40"
                             aria-label="เพิ่มจำนวน"
                             disabled={atLimit}

@@ -108,7 +108,6 @@ function Sidebar({ active, onChange, isOpen, onClose }) {
     </>
   );
 }
-
 /* -------------------- ProductsPanel -------------------- */
 function ProductsPanel() {
   const [list, setList] = useState([]);
@@ -120,6 +119,41 @@ function ProductsPanel() {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState("");
 
+  // ====== ขนาด (อก/ยาว) ======
+  const [measureRows, setMeasureRows] = useState([]); // [{chest, length, stock}]
+
+  const addMeasureRow = () => {
+    setMeasureRows((rows) => [...rows, { chest: "", length: "", stock: 0 }]);
+  };
+  const updateMeasureRow = (idx, key, val) => {
+    setMeasureRows((rows) =>
+      rows.map((r, i) => (i === idx ? { ...r, [key]: val } : r))
+    );
+  };
+  const removeMeasureRow = (idx) => {
+    setMeasureRows((rows) => rows.filter((_, i) => i !== idx));
+  };
+
+  const sumStockFromMeasures = useMemo(
+    () => measureRows.reduce((a, b) => a + Number(b.stock || 0), 0),
+    [measureRows]
+  );
+
+  const parseMeasureVariants = (raw) => {
+    let mv = raw?.measure_variants ?? raw?.measureVariants ?? null;
+    if (!mv) return [];
+    if (typeof mv === "string") {
+      try { mv = JSON.parse(mv); } catch { mv = []; }
+    }
+    if (!Array.isArray(mv)) return [];
+    return mv.map((v) => ({
+      chest: Number(v?.chest_cm ?? v?.chest ?? ""),
+      length: Number(v?.length_cm ?? v?.length ?? ""),
+      stock: Number(v?.stock ?? 0),
+    })).filter((r) => Number.isFinite(r.chest) && Number.isFinite(r.length));
+  };
+
+  // ====== ค้นหา/กรอง ======
   const filtered = useMemo(() => {
     const kw = q.toLowerCase().trim();
     let items = Array.isArray(list) ? list : [];
@@ -132,6 +166,7 @@ function ProductsPanel() {
     return items;
   }, [q, list]);
 
+  // ====== โหลดข้อมูล ======
   async function loadProducts() {
     setLoading(true);
     try {
@@ -159,16 +194,19 @@ function ProductsPanel() {
     })();
   }, []);
 
+  // ====== ฟอร์ม ======
   function openCreate() {
     setEditing({ id: null, name: "", price: 0, category_id: "", description: "", stock: 0, image: "" });
     setFile(null);
     setPreview("");
+    setMeasureRows([]); // เคลียร์ตาราง อก/ยาว
     setDrawerOpen(true);
   }
   function openEdit(row) {
     setEditing({ ...row });
     setFile(null);
     setPreview(row.image ? `http://localhost:3000${row.image}` : "");
+    setMeasureRows(parseMeasureVariants(row)); // โหลดตาราง อก/ยาว
     setDrawerOpen(true);
   }
   function closeDrawer() {
@@ -176,38 +214,56 @@ function ProductsPanel() {
     setEditing(null);
     setFile(null);
     setPreview("");
+    setMeasureRows([]);
   }
 
-  async function save() {
-    if (!editing) return;
-    if (!editing.name?.trim()) return alert("กรุณากรอกชื่อสินค้า");
+async function save() {
+  if (!editing) return;
+  if (!editing.name?.trim()) return alert("กรุณากรอกชื่อสินค้า");
 
-    const formData = new FormData();
-    formData.append("name", editing.name);
-    formData.append("price", editing.price ?? 0);
-    formData.append("stock", editing.stock ?? 0);
-    if (editing.category_id) formData.append("category_id", editing.category_id);
-    if (editing.description) formData.append("description", editing.description);
-    if (file) formData.append("image", file);
-    else if (editing.image) formData.append("oldImage", editing.image);
+  const formData = new FormData();
+  formData.append("name", editing.name);
+  formData.append("price", editing.price ?? 0);
 
-    const method = editing.id ? "PUT" : "POST";
-    const url = editing.id ? `${API.products}/${editing.id}` : API.products;
+  // === stock ใช้จากตาราง อก/ยาว ===
+  const cleaned = measureRows
+    .filter(r => r.chest !== "" && r.length !== "")
+    .map(r => ({
+      chest_cm: Number(r.chest),
+      length_cm: Number(r.length),
+      stock: Number(r.stock || 0),
+    }));
 
-    try {
-      const res = await fetch(url, { method, body: formData });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        console.error("save failed:", data);
-        return alert("บันทึกไม่สำเร็จ");
-      }
-      await loadProducts();
-      closeDrawer();
-    } catch (err) {
-      console.error("save error:", err);
-      alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์");
+  if (cleaned.length > 0) {
+    formData.append("measureVariants", JSON.stringify(cleaned));
+    const totalFromMeasures = cleaned.reduce((a, b) => a + Number(b.stock || 0), 0);
+    formData.append("stock", totalFromMeasures); // ✅ ใช้รวมจากตาราง
+  } else {
+    formData.append("stock", 0); // ✅ ไม่มีตาราง → สต็อก = 0
+  }
+
+  if (editing.category_id) formData.append("category_id", editing.category_id);
+  if (editing.description) formData.append("description", editing.description);
+  if (file) formData.append("image", file);
+  else if (editing.image) formData.append("oldImage", editing.image);
+
+  const method = editing.id ? "PUT" : "POST";
+  const url = editing.id ? `${API.products}/${editing.id}` : API.products;
+
+  try {
+    const res = await fetch(url, { method, body: formData });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      console.error("save failed:", data);
+      return alert("บันทึกไม่สำเร็จ");
     }
+    await loadProducts();
+    closeDrawer();
+  } catch (err) {
+    console.error("save error:", err);
+    alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์");
   }
+}
 
   async function remove(id) {
     if (!window.confirm("ลบสินค้านี้หรือไม่?")) return;
@@ -353,15 +409,6 @@ function ProductsPanel() {
                     className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm text-neutral-400 mb-1">สต็อก</label>
-                  <input
-                    type="number"
-                    value={editing?.stock ?? 0}
-                    onChange={(e) => setEditing((s) => ({ ...s, stock: Number(e.target.value) }))}
-                    className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white"
-                  />
-                </div>
               </div>
 
               <div>
@@ -384,6 +431,91 @@ function ProductsPanel() {
                     className="mt-3 w-36 h-36 object-cover rounded-xl border border-neutral-800"
                   />
                 )}
+              </div>
+
+              {/* === ขนาด (อก/ยาว) === */}
+              <div className="mt-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm text-neutral-400 mb-1">ขนาด (อก/ยาว)</label>
+                  <div className="text-xs text-neutral-400">
+                    สต็อกรวมจากตารางนี้: <span className="text-white font-semibold">{sumStockFromMeasures}</span> ชิ้น
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-neutral-800 rounded-xl">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-neutral-950 text-neutral-400">
+                      <tr>
+                        <th className="px-3 py-2 text-left">อก (นิ้ว)</th>
+                        <th className="px-3 py-2 text-left">ยาว (นิ้ว)</th>
+                        <th className="px-3 py-2 text-left">สต็อก</th>
+                        <th className="px-3 py-2 text-right">จัดการ</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-800 bg-neutral-900">
+                      {measureRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-3 py-4 text-center text-neutral-500">
+                            ยังไม่มีแถว กด “เพิ่มแถว” เพื่อเริ่มต้น
+                          </td>
+                        </tr>
+                      ) : (
+                        measureRows.map((r, idx) => (
+                          <tr key={idx}>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number" step="0.1"
+                                value={r.chest}
+                                onChange={(e) => updateMeasureRow(idx, "chest", e.target.value)}
+                                placeholder=""
+                                className="w-28 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white"
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number" step="0.1"
+                                value={r.length}
+                                onChange={(e) => updateMeasureRow(idx, "length", e.target.value)}
+                                placeholder=""
+                                className="w-28 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white"
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                value={r.stock}
+                                onChange={(e) => updateMeasureRow(idx, "stock", e.target.value)}
+                                className="w-24 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-white"
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              <button
+                                onClick={() => removeMeasureRow(idx)}
+                                className="px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white"
+                              >
+                                ลบ
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={addMeasureRow}
+                    className="px-3 py-1.5 rounded-lg bg-neutral-200 text-black hover:bg-white"
+                  >
+                    เพิ่มแถว
+                  </button>
+                </div>
+
+                <p className="text-xs text-neutral-500 mt-2">
+                  * ค่าที่กรอกจะถูกส่งเป็น <code>measureVariants</code> เช่น <code>[&#123; chest_cm:40, length_cm:27, stock:3 &#125;]</code>
+                </p>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">

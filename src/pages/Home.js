@@ -65,18 +65,22 @@ export default function Home() {
           </div>
           <div>
             <h4 className="font-bold mb-2">เมนู</h4>
-            <p>หน้าแรก</p>
-            <p>สินค้า</p>
             <p>ติดต่อเรา</p>
           </div>
           <div>
             <h4 className="font-bold mb-2">ติดตามเรา</h4>
-            <p>Facebook</p>
-            <p>Instagram</p>
+<a
+  href="https://www.instagram.com/kp_vintage90store/"
+  target="_blank"
+  rel="noopener noreferrer"
+  className="text-blue-500 hover:underline"
+>
+  Instagram
+</a>
           </div>
           <div>
             <h4 className="font-bold mb-2">ติดต่อ</h4>
-            <p>โทร: 090-XXXXXXX</p>
+            <p>โทร: 090-840-5158</p>
             <p>LINE: @kpvintage</p>
           </div>
         </div>

@@ -1,14 +1,15 @@
+// src/context/CartContext.jsx
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 
 const CartContext = createContext();
 
 /* ---------- Utils (HARDENED) ---------- */
-const normId = (v) => String(v ?? '');
+const normId   = (v) => String(v ?? '');
 const normSize = (v) => (v == null ? null : String(v));
+const normKey  = (v) => (v == null ? null : String(v)); // สำหรับ variantKey (เช่น c25-l24)
 
 const toNumFinite = (v) => {
-  // อย่าตีความ null/undefined/'' เป็น 0
   if (v === null || v === undefined || v === '') return undefined;
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : undefined;
@@ -33,6 +34,14 @@ const safeParseArr = (json) => {
 
 const isFiniteNum = (n) => Number.isFinite(Number(n));
 
+/** คีย์เอกลักษณ์ของ item ในตะกร้า: id + (variantKey || size) */
+const cartKeyOf = (it) => {
+  const id = normId(it?.id);
+  const vk = normKey(it?.variantKey);
+  const sz = normSize(it?.size);
+  return `${id}::${vk ?? sz ?? ''}`;
+};
+
 const readCart = (key) => {
   const raw = localStorage.getItem(key);
   const arr = safeParseArr(raw);
@@ -44,6 +53,9 @@ const readCart = (key) => {
         ...it,
         id: normId(it?.id),
         size: normSize(it?.size),
+        variantKey: normKey(it?.variantKey),
+        // measures เก็บตามที่มา (อาจเป็น {chest_cm, length_cm}) ไม่บังคับแปลง
+        measures: it?.measures ?? null,
         price: Number(it?.price || 0),
         qty,
         maxStock: parsedMax ?? Infinity,
@@ -62,12 +74,11 @@ const writeCart = (key, arr) => {
 const mergeCarts = (a = [], b = []) => {
   const map = new Map();
   [...a, ...b].forEach((it) => {
-    const id = normId(it.id);
+    const id = normId(it?.id);
     if (!id) return; // ⛔ กัน id ว่างไม่ให้รวมเข้าไป
-    const size = normSize(it.size);
-    const key = `${id}::${size ?? ''}`;
-    const prev = map.get(key) || { ...it, id, size, qty: 0, price: Number(it.price || 0) };
-    map.set(key, { ...prev, qty: (prev.qty || 0) + (Number(it.qty) || 1) });
+    const k = cartKeyOf(it);
+    const prev = map.get(k) || { ...it, id, qty: 0, price: Number(it.price || 0) };
+    map.set(k, { ...prev, qty: (prev.qty || 0) + (Number(it.qty) || 1) });
   });
   return [...map.values()];
 };
@@ -96,7 +107,6 @@ export function CartProvider({ children }) {
     const prevKey = lastUserKeyRef.current; // null = guest เดิม
     const currKey = userKey;                // null = guest ใหม่
 
-    // เริ่มรอบใหม่: ปิด writer ไว้ก่อน
     setHydrated(false);
 
     // 1) guest → user (ล็อกอิน)
@@ -106,8 +116,7 @@ export function CartProvider({ children }) {
       const merged = mergeCarts(userCartStored, guestCartStored);
 
       writeCart(`cart:${currKey}`, merged);
-      // ✅ สำคัญ: ล้าง guest ทันที กันบวกซ้ำรอบถัดไป
-      localStorage.removeItem('cart:guest');
+      localStorage.removeItem('cart:guest'); // ✅ กันบวกซ้ำ
 
       mergedForKeyRef.current = currKey;
       setCart(merged);
@@ -118,7 +127,6 @@ export function CartProvider({ children }) {
 
     // 2) user → guest (ล็อกเอาต์)
     if (prevKey !== null && currKey === null) {
-      // ✅ เคลียร์ guest cart ให้ว่าง เพื่อไม่เอามา merge รอบเข้าใหม่
       writeCart('cart:guest', []);
       setCart([]);
       lastUserKeyRef.current = null;
@@ -129,10 +137,8 @@ export function CartProvider({ children }) {
 
     // 3) สลับบัญชี userA → userB
     if (prevKey !== null && currKey !== null && prevKey !== currKey) {
-      // โหลดของ userB โดยไม่ merge กับ guest เพื่อกันรั่ว/ซ้ำ
       const newUserCart = readCart(`cart:${currKey}`);
       writeCart(`cart:${currKey}`, newUserCart);
-      // กันกรณี guest ค้างจากก่อนหน้า
       localStorage.removeItem('cart:guest');
 
       mergedForKeyRef.current = currKey;
@@ -144,22 +150,18 @@ export function CartProvider({ children }) {
 
     // 4) คีย์ไม่เปลี่ยน
     if (currKey === null) {
-      // guest: sync จาก storage
       setCart(readCart('cart:guest'));
     } else {
       if (mergedForKeyRef.current !== currKey) {
-        // เข้าสู่หน้าแรกหลัง login: รวม storage ครั้งเดียวเพื่อความชัวร์
         const userCartStored  = readCart(`cart:${currKey}`);
         const guestCartStored = readCart('cart:guest');
         const merged = mergeCarts(userCartStored, guestCartStored);
         writeCart(`cart:${currKey}`, merged);
-        // ✅ ล้าง guest หลัง merge เพื่อกันบวกซ้ำ
         localStorage.removeItem('cart:guest');
 
         mergedForKeyRef.current = currKey;
         setCart(merged);
       } else {
-        // sync user cart จาก storage
         setCart(readCart(`cart:${currKey}`));
       }
     }
@@ -169,43 +171,53 @@ export function CartProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userKey]);
 
-  // เขียน state ลง storage ตามคีย์ปัจจุบันเสมอ (แต่เฉพาะหลัง hydrate)
+  // เขียน state ลง storage ตามคีย์ปัจจุบันเสมอ (หลัง hydrate เท่านั้น)
   useEffect(() => {
-    if (!hydrated) return; // ป้องกัน “เขียนทับเป็น []” ตอน userKey เพิ่งเปลี่ยน
+    if (!hydrated) return;
     const key = userKey ? `cart:${userKey}` : 'cart:guest';
     writeCart(key, cart);
   }, [cart, userKey, hydrated]);
 
   /* ---------- Helpers ---------- */
-  const findIndexesById = (list, id) => {
+  const findIndexByIdKey = (list, id, variantKey, size) => {
     const nid = normId(id);
-    const idxs = [];
-    list.forEach((p, i) => { if (normId(p.id) === nid) idxs.push(i); });
-    return idxs;
-  };
-  const findIndexByIdSize = (list, id, size) => {
-    const nid = normId(id);
-    const nsize = normSize(size);
-    return list.findIndex(p => normId(p.id) === nid && normSize(p.size) === nsize);
+    const nvk = normKey(variantKey);
+    const nsz = normSize(size);
+    return list.findIndex(p =>
+      normId(p.id) === nid &&
+      (normKey(p.variantKey) ?? null) === (nvk ?? null) &&
+      (normSize(p.size)      ?? null) === (nsz ?? null)
+    );
   };
 
   /* ================= Mutations ================= */
   const addToCart = (item) => {
-    const id = normId(item.id);
+    const id   = normId(item.id);
     const size = normSize(item.size);
+    const vKey = normKey(item.variantKey);
     const price = Number(item.price);
     const qtyToAdd = Math.max(1, Number(item.qty) || 1);
     const incomingMax = toNumFinite(item.maxStock);
 
-    // ⛔ ป้องกันของเสียตั้งแต่ต้นทาง
     if (!id) { console.warn('addToCart: missing id', item); return; }
     if (!Number.isFinite(price)) { console.warn('addToCart: invalid price', item); return; }
 
     setCart(prev => {
-      const idx = findIndexByIdSize(prev, id, size);
+      const idx = findIndexByIdKey(prev, id, vKey, size);
       if (idx === -1) {
         const initMax = incomingMax ?? Infinity;
-        return [...prev, { ...item, id, size, price, qty: clampQty(qtyToAdd, initMax), maxStock: initMax }];
+        return [
+          ...prev,
+          {
+            ...item,
+            id,
+            size,
+            variantKey: vKey,
+            price,
+            qty: clampQty(qtyToAdd, initMax),
+            maxStock: initMax,
+          }
+        ];
       }
       const copy = [...prev];
       const old = copy[idx];
@@ -220,26 +232,39 @@ export function CartProvider({ children }) {
       }
 
       const nextQty = clampQty((Number(old.qty) || 0) + qtyToAdd, newMax);
-      copy[idx] = { ...old, qty: nextQty, maxStock: newMax, price };
+      copy[idx] = {
+        ...old,
+        qty: nextQty,
+        maxStock: newMax,
+        price,
+        size,
+        variantKey: vKey,
+        measures: item.measures ?? old.measures ?? null,
+      };
       return copy;
     });
   };
 
-  const removeFromCart = (id, size = null) => {
-    const nid = normId(id);
-    const nsize = normSize(size);
+  const removeFromCart = (id, size = null, variantKey = null) => {
+    const nid  = normId(id);
+    const nsz  = normSize(size);
+    const nvk  = normKey(variantKey);
     setCart(prev => {
-      if (nsize !== null) return prev.filter(p => !(normId(p.id) === nid && normSize(p.size) === nsize));
-      return prev.filter(p => normId(p.id) !== nid);
+      return prev.filter(p =>
+        !(normId(p.id) === nid &&
+          (normSize(p.size)      ?? null) === (nsz ?? null) &&
+          (normKey(p.variantKey) ?? null) === (nvk ?? null))
+      );
     });
   };
 
-  const setQty = (id, size = null, qty) => {
+  const setQty = (id, size = null, qty, variantKey = null) => {
     const nid = normId(id);
-    const nsize = normSize(size);
+    const nsz = normSize(size);
+    const nvk = normKey(variantKey);
     setCart(prev => {
       const copy = [...prev];
-      const idx = nsize !== null ? findIndexByIdSize(copy, nid, nsize) : findIndexesById(copy, nid)[0] ?? -1;
+      const idx = findIndexByIdKey(copy, nid, nvk, nsz);
       if (idx === -1) return prev;
       const nextQty = Math.max(0, Number(qty) || 0);
       if (nextQty === 0) return copy.filter((_, i) => i !== idx);
@@ -249,12 +274,13 @@ export function CartProvider({ children }) {
     });
   };
 
-  const increaseQty = (id, size = null, step = 1) => {
+  const increaseQty = (id, size = null, step = 1, variantKey = null) => {
     const nid = normId(id);
-    const nsize = normSize(size);
+    const nsz = normSize(size);
+    const nvk = normKey(variantKey);
     setCart(prev => {
       const copy = [...prev];
-      const idx = nsize !== null ? findIndexByIdSize(copy, nid, nsize) : findIndexesById(copy, nid)[0] ?? -1;
+      const idx = findIndexByIdKey(copy, nid, nvk, nsz);
       if (idx === -1) return prev;
       const max = copy[idx].maxStock;
       copy[idx] = { ...copy[idx], qty: clampQty((copy[idx].qty || 1) + step, max) };
@@ -262,12 +288,13 @@ export function CartProvider({ children }) {
     });
   };
 
-  const decreaseQty = (id, size = null, step = 1) => {
+  const decreaseQty = (id, size = null, step = 1, variantKey = null) => {
     const nid = normId(id);
-    const nsize = normSize(size);
+    const nsz = normSize(size);
+    const nvk = normKey(variantKey);
     setCart(prev => {
       const copy = [...prev];
-      const idx = nsize !== null ? findIndexByIdSize(copy, nid, nsize) : findIndexesById(copy, nid)[0] ?? -1;
+      const idx = findIndexByIdKey(copy, nid, nvk, nsz);
       if (idx === -1) return prev;
       const next = Math.max(0, (Number(copy[idx].qty) || 1) - step);
       if (next === 0) return copy.filter((_, i) => i !== idx);

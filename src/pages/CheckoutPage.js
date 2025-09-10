@@ -33,7 +33,7 @@ export default function CheckoutPage() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState(null);
 
-  // โปรไฟล์ (เก็บมาทั้ง profile_image ด้วย)
+  // โปรไฟล์
   const [profile, setProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [saveToProfile, setSaveToProfile] = useState(true);
@@ -57,10 +57,8 @@ export default function CheckoutPage() {
           phone: data?.phone || f.phone || '',
           addressLine: data?.address || f.addressLine || '',
         }));
-      } catch {
-      } finally {
-        setLoadingProfile(false);
-      }
+      } catch {}
+      finally { setLoadingProfile(false); }
     }
     loadProfile();
   }, [user?.email]);
@@ -92,10 +90,7 @@ export default function CheckoutPage() {
     }
     if (!/^\d{5}$/.test(String(form.postcode))) return 'รหัสไปรษณีย์ต้องเป็นตัวเลข 5 หลัก';
     if (!/^\d{9,10}$/.test(String(form.phone))) return 'เบอร์โทรควรเป็นตัวเลข 9-10 หลัก';
-
-    if (paymentMethod === 'transfer' && !slipFile) {
-      return 'กรุณาแนบรูปสลิปโอนเงิน';
-    }
+    if (paymentMethod === 'transfer' && !slipFile) return 'กรุณาแนบรูปสลิปโอนเงิน';
     return null;
   }
 
@@ -106,15 +101,29 @@ export default function CheckoutPage() {
     setErr(null);
     setSubmitting(true);
     try {
-      const items = (cart || []).map((it) => ({
-        id: it.id,
-        name: it.name,
-        size: it.size ?? null,
-        price: Number(it.price) || 0,
-        qty: it.qty || 1,
-        image: it.image || null,
-        category: it.category || null,
-      }));
+      // ✅ ส่ง variantKey + measures ไปด้วย (หักสต็อกได้ตรงตัวเลือก)
+      // ✅ ไม่เติมคำว่า "นิ้ว" ฝั่ง UI/ payload — ให้แบ็กเอนด์เติมเองตอนบันทึก
+      const items = (cart || []).map((it) => {
+        const prettySize =
+          it.size
+            ? it.size
+            : (it.measures
+                ? `อก ${it.measures.chest_cm}″ / ยาว ${it.measures.length_cm}″`
+                : null);
+
+        return {
+          id: it.id,
+          name: it.name,
+          price: Number(it.price) || 0,
+          qty: it.qty || 1,
+          image: it.image || null,
+          category: it.category || null,
+
+          size: prettySize,               // ไม่เติม "นิ้ว" ใน payload
+          variantKey: it.variantKey ?? null,
+          measures: it.measures ?? null,  // { chest_cm, length_cm }
+        };
+      });
 
       const payload = {
         userId: user?.id || user?.user_id || null,
@@ -137,32 +146,27 @@ export default function CheckoutPage() {
       if (!res.ok) throw new Error(data?.message || 'สร้างคำสั่งซื้อไม่สำเร็จ');
       const orderId = data?.orderId || data?.id;
 
-      // 2) ถ้าโอน → อัปโหลดสลิป
+      // 2) โอน → อัปโหลดสลิป
       if (paymentMethod === 'transfer' && orderId) {
         const fd = new FormData();
         fd.append('file', slipFile);
         if (slipAmount) fd.append('amount', slipAmount);
-
-        const up = await fetch(`${API_BASE}/api/orders/${orderId}/upload-slip`, {
-          method: 'POST',
-          body: fd,
-        });
+        const up = await fetch(`${API_BASE}/api/orders/${orderId}/upload-slip`, { method: 'POST', body: fd });
         const upData = await up.json().catch(() => ({}));
         if (!up.ok) throw new Error(upData?.message || 'อัปโหลดสลิปไม่สำเร็จ');
       }
 
-      // 3) (ตัวเลือก) บันทึกกลับโปรไฟล์ — ส่ง profile_image เดิมไปด้วย กันรูปหาย
+      // 3) อัปเดตโปรไฟล์ (ถ้าติ๊กบันทึก)
       if (saveToProfile && user?.email) {
         try {
           await fetch(`${API_BASE}/api/profile`, {
-            method: 'PUT', // ถ้า backend รองรับ PATCH แนะนำใช้ PATCH
+            method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               email: user.email,
               username: form.fullName,
               phone: form.phone,
               address: form.addressLine,
-              // ✅ สำคัญ: อย่าทิ้งรูปเดิม
               profile_image:
                 profile?.profile_image ||
                 user?.profile_image ||
@@ -173,7 +177,7 @@ export default function CheckoutPage() {
         } catch {}
       }
 
-      // 4) เก็บ summary กันหาย
+      // 4) เก็บสรุป & ไปหน้าสำเร็จ
       const summary = {
         orderId,
         items,
@@ -182,15 +186,9 @@ export default function CheckoutPage() {
         paymentMethod,
         address: { ...form },
       };
-      try {
-        sessionStorage.setItem('lastOrderSummary', JSON.stringify(summary));
-      } catch {}
-
-      clearCart(); // ต้องลบเฉพาะ cart ไม่ลบ localStorage ทั้งหมด
-      navigate(orderId ? `/order-success/${orderId}` : `/order-success`, {
-        replace: true,
-        state: { summary },
-      });
+      try { sessionStorage.setItem('lastOrderSummary', JSON.stringify(summary)); } catch {}
+      clearCart();
+      navigate(orderId ? `/order-success/${orderId}` : `/order-success`, { replace: true, state: { summary } });
     } catch (e) {
       setErr(e.message || 'เกิดข้อผิดพลาด');
     } finally {
@@ -215,7 +213,7 @@ export default function CheckoutPage() {
         {/* ซ้าย: ฟอร์มข้อมูลผู้รับ */}
         <div className="lg:col-span-2 space-y-6">
           {err && (
-            <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 p-3 text-sm">
+            <div className="rounded-xl border border-red-2 00 bg-red-50 text-red-700 p-3 text-sm">
               {err}
             </div>
           )}
@@ -355,11 +353,21 @@ export default function CheckoutPage() {
               {cart.map((it) => {
                 const price = Number(it.price) || 0;
                 const qty = it.qty || 1;
+
+                // แสดงผลสวย ๆ ฝั่ง UI (ไม่เติม "นิ้ว")
+                const prettySize =
+                  it.size
+                    ? it.size
+                    : (it.measures ? `อก ${it.measures.chest_in}″ / ยาว ${it.measures.length_in}″` : null);
+
                 return (
-                  <li key={`${it.id}::${it.size ?? ''}`} className="flex items-center justify-between text-sm">
+                  <li
+                    key={`${it.id}::${it.variantKey ?? it.size ?? ''}`}
+                    className="flex items-center justify-between text-sm"
+                  >
                     <div className="min-w-0">
                       <div className="truncate font-medium">
-                        {it.name}{it.size ? ` • ${it.size}` : ''} × {qty}
+                        {it.name}{prettySize ? ` • ${prettySize}` : ''} × {qty}
                       </div>
                       <div className="text-neutral-500">{formatTHB(price)} / ชิ้น</div>
                     </div>
