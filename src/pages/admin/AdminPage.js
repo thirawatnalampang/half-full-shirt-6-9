@@ -140,19 +140,19 @@ function ProductsPanel() {
   );
 
   const parseMeasureVariants = (raw) => {
-    let mv = raw?.measure_variants ?? raw?.measureVariants ?? null;
-    if (!mv) return [];
-    if (typeof mv === "string") {
-      try { mv = JSON.parse(mv); } catch { mv = []; }
-    }
-    if (!Array.isArray(mv)) return [];
-    return mv.map((v) => ({
-      chest: Number(v?.chest_cm ?? v?.chest ?? ""),
-      length: Number(v?.length_cm ?? v?.length ?? ""),
-      stock: Number(v?.stock ?? 0),
-    })).filter((r) => Number.isFinite(r.chest) && Number.isFinite(r.length));
-  };
-
+  let mv = raw?.measure_variants ?? raw?.measureVariants ?? null;
+  if (!mv) return [];
+  if (typeof mv === "string") {
+    try { mv = JSON.parse(mv); } catch { mv = []; }
+  }
+  if (!Array.isArray(mv)) return [];
+  return mv.map((v) => {
+    const chest  = Number(v?.chest_in  ?? v?.chest_cm  ?? v?.chest  ?? "");
+    const length = Number(v?.length_in ?? v?.length_cm ?? v?.length ?? "");
+    const stock  = Number(v?.stock ?? 0);
+    return { chest, length, stock };
+  }).filter((r) => Number.isFinite(r.chest) && Number.isFinite(r.length));
+};
   // ====== ค้นหา/กรอง ======
   const filtered = useMemo(() => {
     const kw = q.toLowerCase().trim();
@@ -216,7 +216,6 @@ function ProductsPanel() {
     setPreview("");
     setMeasureRows([]);
   }
-
 async function save() {
   if (!editing) return;
   if (!editing.name?.trim()) return alert("กรุณากรอกชื่อสินค้า");
@@ -225,22 +224,19 @@ async function save() {
   formData.append("name", editing.name);
   formData.append("price", editing.price ?? 0);
 
-  // === stock ใช้จากตาราง อก/ยาว ===
+  // ✅ สร้าง array นิ้ว
   const cleaned = measureRows
     .filter(r => r.chest !== "" && r.length !== "")
     .map(r => ({
-      chest_cm: Number(r.chest),
-      length_cm: Number(r.length),
-      stock: Number(r.stock || 0),
+      chest_in:  Number(r.chest),
+      length_in: Number(r.length),
+      stock:     Number(r.stock || 0),
     }));
 
-  if (cleaned.length > 0) {
-    formData.append("measureVariants", JSON.stringify(cleaned));
-    const totalFromMeasures = cleaned.reduce((a, b) => a + Number(b.stock || 0), 0);
-    formData.append("stock", totalFromMeasures); // ✅ ใช้รวมจากตาราง
-  } else {
-    formData.append("stock", 0); // ✅ ไม่มีตาราง → สต็อก = 0
-  }
+  // ✅ ส่ง measureVariants "เสมอ" (อย่างน้อยเป็น [])
+  formData.append("measureVariants", JSON.stringify(cleaned));
+  const totalFromMeasures = cleaned.reduce((a, b) => a + Number(b.stock || 0), 0);
+  formData.append("stock", totalFromMeasures); // ไม่มีแถว = 0
 
   if (editing.category_id) formData.append("category_id", editing.category_id);
   if (editing.description) formData.append("description", editing.description);
@@ -255,7 +251,7 @@ async function save() {
     const data = await res.json();
     if (!res.ok || !data.success) {
       console.error("save failed:", data);
-      return alert("บันทึกไม่สำเร็จ");
+      return alert(data?.message || "บันทึกไม่สำเร็จ");
     }
     await loadProducts();
     closeDrawer();

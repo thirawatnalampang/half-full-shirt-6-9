@@ -40,15 +40,17 @@ export default function ProductDetail() {
     const out = [];
     if (Array.isArray(mv)) {
       for (const v of mv) {
-        const chest = Number(v?.chest_cm ?? v?.chest ?? NaN);
-        const length = Number(v?.length_cm ?? v?.length ?? NaN);
-        const stock = Number(v?.stock ?? 0);
+        // ✅ รองรับ chest_in/length_in (นิ้ว) และ fallback ไป cm/คีย์เก่า
+        const chest  = Number(v?.chest_in  ?? v?.chest_cm  ?? v?.chest  ?? NaN);
+        const length = Number(v?.length_in ?? v?.length_cm ?? v?.length ?? NaN);
+        const stock  = Number(v?.stock ?? 0);
         if (Number.isFinite(chest) && Number.isFinite(length)) {
           const key = `c${chest}-l${length}`;
           out.push({ key, chest, length, stock });
         }
       }
     }
+    // รวม key ซ้ำ ให้เหลือสต็อกมากสุดในชุดเดียว
     const best = new Map();
     for (const v of out) {
       const prev = best.get(v.key);
@@ -58,6 +60,14 @@ export default function ProductDetail() {
       a.chest !== b.chest ? a.chest - b.chest : a.length - b.length
     );
   }, [product]);
+
+  // เลือก default เป็นตัวแรกที่มีสต็อก
+  useEffect(() => {
+    if (!selectedKey && measureVariants.length > 0) {
+      const firstInStock = measureVariants.find(m => Number(m.stock) > 0);
+      if (firstInStock) setSelectedKey(firstInStock.key);
+    }
+  }, [measureVariants, selectedKey]);
 
   const stockByKey = useMemo(() => {
     const o = {};
@@ -69,18 +79,17 @@ export default function ProductDetail() {
     if (measureVariants.length > 0) {
       return measureVariants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
     }
-    if (typeof product?.stock === "number") return Number(product.stock);
-    return undefined;
+    const ps = Number(product?.stock);
+    return Number.isFinite(ps) ? ps : undefined;
   }, [measureVariants, product]);
 
   const isAllOut = totalStock === 0;
   const hasStockForKey = (k) => Number(stockByKey[k] || 0) > 0;
 
   const maxQty = useMemo(() => {
-    if (!selectedKey) return 99;
-    if (Object.keys(stockByKey).length > 0)
+    if (selectedKey && Object.keys(stockByKey).length > 0)
       return Math.max(0, Number(stockByKey[selectedKey] || 0));
-    if (typeof totalStock === "number") return Math.max(0, totalStock);
+    if (Number.isFinite(totalStock)) return Math.max(0, totalStock);
     return 99;
   }, [selectedKey, stockByKey, totalStock]);
 
@@ -91,9 +100,9 @@ export default function ProductDetail() {
   const handleAdd = () => {
     if (!product || isAllOut || !selectedKey || !hasStockForKey(selectedKey)) return;
     const chosen = measureVariants.find((m) => m.key === selectedKey);
-    const sizeLabel = chosen
-      ? `อก ${chosen.chest}″ / ยาว ${chosen.length}″ นิ้ว`
-      : null;
+
+    // แสดง/เก็บเป็นนิ้ว (ใช้ ″ อย่างเดียว เลี่ยง "นิ้ว นิ้ว")
+    const sizeLabel = chosen ? `อก ${chosen.chest}″ / ยาว ${chosen.length}″` : null;
 
     addToCart({
       id: product.id,
@@ -102,8 +111,11 @@ export default function ProductDetail() {
       price: product.price,
       qty,
       size: sizeLabel,
-      measures: chosen ? { chest_cm: chosen.chest, length_cm: chosen.length } : null,
+      // ✅ เก็บ measures เป็นนิ้ว (ให้ตรงกับ backend ใหม่)
+      measures: chosen ? { chest_in: chosen.chest, length_in: chosen.length } : null,
       variantKey: selectedKey,
+      // แนะนำให้ใส่ maxStock ด้วย เพื่อให้ Cart จำกัดจำนวนตามสต็อกตัวเลือก
+      maxStock: chosen ? Number(chosen.stock || 0) : Number(product?.stock || 0),
     });
 
     setAdded(true);
@@ -158,7 +170,7 @@ export default function ProductDetail() {
               {measureVariants.map((m) => {
                 const active = selectedKey === m.key;
                 const inStock = hasStockForKey(m.key);
-                const label = `อก ${m.chest}″ / ยาว ${m.length}″ นิ้ว`;
+                const label = `อก ${m.chest}″ / ยาว ${m.length}″`;
                 return (
                   <button
                     key={m.key}

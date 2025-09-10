@@ -13,11 +13,12 @@ export default function ProductCard({ product }) {
   const [selectedKey, setSelectedKey] = useState(null);
   const [limitHit, setLimitHit] = useState(false);
 
-  /* ---------- รวม “อก/ยาว” ---------- */
+  /* ---------- รวม “อก/ยาว” (รองรับ chest_in/length_in และ fallback *_cm/เก่า) ---------- */
   const measureVariants = useMemo(() => {
     if (!product) return [];
     const out = [];
 
+    // 1) จาก product.measure_variants / measureVariants (อาจเป็น array หรือ JSON string)
     const mvDirect = Array.isArray(product?.measure_variants || product?.measureVariants)
       ? (product.measure_variants || product.measureVariants)
       : (() => {
@@ -29,31 +30,39 @@ export default function ProductCard({ product }) {
         })();
 
     for (const v of mvDirect) {
-      const chest = Number(v?.chest_cm ?? v?.chest ?? NaN);
-      const length = Number(v?.length_cm ?? v?.length ?? NaN);
+      const chest  = Number(v?.chest_in  ?? v?.chest_cm  ?? v?.chest  ?? NaN);
+      const length = Number(v?.length_in ?? v?.length_cm ?? v?.length ?? NaN);
       const stock  = Number(v?.stock ?? 0);
       if (Number.isFinite(chest) && Number.isFinite(length)) {
-        out.push({ key: `c${chest}-l${length}`, chest, length, stock, meta: { source: 'measure_variants' }});
+        out.push({ key: `c${chest}-l${length}`, chest, length, stock, meta: { source: 'measure_variants' } });
       }
     }
 
+    // 2) จาก product.variants (ถ้ามี)
     const fromVariants = Array.isArray(product?.variants) ? product.variants : [];
     for (const v of fromVariants) {
-      const chest = Number(v?.chest_cm ?? v?.chest ?? NaN);
-      const length = Number(v?.length_cm ?? v?.length ?? NaN);
+      const chest  = Number(v?.chest_in  ?? v?.chest_cm  ?? v?.chest  ?? NaN);
+      const length = Number(v?.length_in ?? v?.length_cm ?? v?.length ?? NaN);
       if (Number.isFinite(chest) && Number.isFinite(length)) {
-        out.push({ key: `c${chest}-l${length}`, chest, length, stock: Number(v?.stock ?? 0), meta: { source: 'variants', id: v?.id ?? null }});
+        out.push({
+          key: `c${chest}-l${length}`,
+          chest,
+          length,
+          stock: Number(v?.stock ?? 0),
+          meta: { source: 'variants', id: v?.id ?? null }
+        });
       }
     }
 
-    const sizeChart = product?.sizeChart && typeof product.sizeChart === 'object' ? product.sizeChart : null;
+    // 3) จาก sizeChart/stockBySize (ถ้ามี)
+    const sizeChart   = product?.sizeChart   && typeof product.sizeChart === 'object' ? product.sizeChart   : null;
     const stockBySize = product?.stockBySize && typeof product.stockBySize === 'object' ? product.stockBySize : null;
     if (sizeChart) {
       const agg = new Map();
       for (const sz of Object.keys(sizeChart)) {
         const m = sizeChart[sz] || {};
-        const chest = Number(m?.chest ?? m?.chest_cm ?? NaN);
-        const length = Number(m?.length ?? m?.length_cm ?? NaN);
+        const chest  = Number(m?.chest_in  ?? m?.chest_cm  ?? m?.chest  ?? NaN);
+        const length = Number(m?.length_in ?? m?.length_cm ?? m?.length ?? NaN);
         if (!Number.isFinite(chest) || !Number.isFinite(length)) continue;
         const stock = stockBySize ? Number(stockBySize[sz] ?? 0) : 0;
         const key = `c${chest}-l${length}`;
@@ -62,24 +71,35 @@ export default function ProductCard({ product }) {
       for (const [key, stock] of agg.entries()) {
         if (!out.some(x => x.key === key)) {
           const [cStr, lStr] = key.replace(/^c/, '').split('-l');
-          out.push({ key, chest: Number(cStr), length: Number(lStr), stock: Number(stock || 0), meta: { source: 'sizeChart' }});
+          out.push({
+            key,
+            chest: Number(cStr),
+            length: Number(lStr),
+            stock: Number(stock || 0),
+            meta: { source: 'sizeChart' }
+          });
         }
       }
     }
 
+    // รวม key ซ้ำ → คงตัวที่สต็อกมากที่สุดไว้
     const best = new Map();
     for (const v of out) {
       const prev = best.get(v.key);
       if (!prev || Number(v.stock) > Number(prev.stock)) best.set(v.key, v);
     }
-    return Array.from(best.values()).sort((a, b) => a.chest !== b.chest ? a.chest - b.chest : a.length - b.length);
+    return Array.from(best.values()).sort((a, b) =>
+      a.chest !== b.chest ? a.chest - b.chest : a.length - b.length
+    );
   }, [product]);
 
-  /* ---------- หักจำนวนที่อยู่ในตะกร้า ---------- */
+  /* ---------- หักจำนวนที่อยู่ในตะกร้า (รองรับ measures เป็นนิ้วใหม่) ---------- */
   const inCartByKey = useMemo(() => {
     const map = {};
     cart.filter(it => it.id === product?.id).forEach(it => {
-      const k = it.variantKey || (it.measures ? `c${Number(it.measures.chest_cm)}-l${Number(it.measures.length_cm)}` : '');
+      const c = it.measures?.chest_in  ?? it.measures?.chest_cm;
+      const l = it.measures?.length_in ?? it.measures?.length_cm;
+      const k = it.variantKey || (Number.isFinite(Number(c)) && Number.isFinite(Number(l)) ? `c${Number(c)}-l${Number(l)}` : '');
       if (!k) return;
       map[k] = (map[k] || 0) + Number(it.qty || 1);
     });
@@ -121,8 +141,8 @@ export default function ProductCard({ product }) {
     }
     const chosen = measureVariants.find(m => m.key === selectedKey);
 
-    // ★ ข้อความขนาดที่ต้องโชว์ในตะกร้า
-    const sizeLabel = chosen ? `อก ${chosen.chest}″ / ยาว ${chosen.length}″ นิ้ว` : null;
+    // ✅ แสดง/บันทึกเป็นนิ้ว ใช้สัญลักษณ์ ″ อย่างเดียว (เลี่ยง "นิ้ว นิ้ว")
+    const sizeLabel = chosen ? `อก ${chosen.chest}″ / ยาว ${chosen.length}″` : null;
 
     addToCart({
       id: product.id,
@@ -132,8 +152,9 @@ export default function ProductCard({ product }) {
         : '/assets/placeholder.png',
       price: Number(product.price || 0),
       qty: 1,
-      size: sizeLabel, // ★ ส่งไปที่ตะกร้า
-      measures: chosen ? { chest_cm: chosen.chest, length_cm: chosen.length } : null,
+      size: sizeLabel,
+      // ✅ ส่ง measures เป็นนิ้วให้ backend ใหม่
+      measures: chosen ? { chest_in: chosen.chest, length_in: chosen.length } : null,
       variantKey: selectedKey,
       maxStock: chosen ? Number(chosen.stock || 0) : undefined,
     });
@@ -247,7 +268,7 @@ export default function ProductCard({ product }) {
                   const left = Number(stockLeftByKey[m.key] || 0);
                   const active = selectedKey === m.key;
                   const canPick = left > 0;
-                  const label = `อก ${m.chest}″ / ยาว ${m.length}″ นิ้ว`; // ★ ใส่ “นิ้ว”
+                  const label = `อก ${m.chest}″ / ยาว ${m.length}″`; // ← ไม่มีคำว่า "นิ้ว" ซ้ำ
                   return (
                     <button
                       key={m.key}

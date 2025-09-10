@@ -456,6 +456,47 @@ app.get('/api/admin/products', async (req, res) => {
   }
 });
 
+
+// ===== utils =====
+function toInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+}
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function sumStockFromMeasures(mvArr) {
+  return mvArr.reduce((s, v) => s + (Number(v?.stock) || 0), 0);
+}
+
+// ===== helpers: measure variants =====
+function parseMeasureVariants(input, body = {}) {
+  let mv = input;
+  if (!mv && (body?.chest_in || body?.length_in)) {
+    // กรณีมาจาก form field array เช่น chest_in[], length_in[], stock[]
+    const chestArr  = [].concat(body.chest_in || body.chest || body.chest_cm || []);
+    const lengthArr = [].concat(body.length_in || body.length || body.length_cm || []);
+    const stockArr  = [].concat(body.stock || []);
+    mv = chestArr.map((c, idx) => ({
+      chest_in:  toInt(c),
+      length_in: toInt(lengthArr[idx]),
+      stock:     toInt(stockArr[idx]),
+    }));
+  } else {
+    if (typeof mv === "string") {
+      try { mv = JSON.parse(mv); } catch { mv = null; }
+    }
+  }
+  if (!Array.isArray(mv)) return [];
+  return mv.map(v => ({
+    chest_in:  toInt(v?.chest_in ?? v?.chest ?? v?.chest_cm ?? v?.อก),
+    length_in: toInt(v?.length_in ?? v?.length ?? v?.length_cm ?? v?.ยาว),
+    stock:     toInt(v?.stock),
+  })).filter(v => Number.isFinite(v.chest_in) && Number.isFinite(v.length_in));
+}
+
+// ========== CREATE ==========
 app.post('/api/admin/products', upload.single('image'), async (req, res) => {
   try {
     const { name, price, stock, category_id, description } = req.body;
@@ -463,21 +504,21 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
       return res.status(400).json({ message: 'ชื่อสินค้าเป็นค่าว่างไม่ได้' });
     }
 
-    // ✅ parse measureVariants (มาจากฟอร์มเป็น string JSON)
-    const mv = parseMeasureVariants(req.body.measureVariants);
-    // ถ้ามีรายการ อก/ยาว → ใช้ยอดรวมแทน stock ที่ส่งมา
-    const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : Number(stock) || 0;
-
+    const mv = parseMeasureVariants(req.body.measureVariants, req.body);
+    const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : toInt(stock);
     const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
 
     const q = `
-      INSERT INTO products (name, price, stock, category_id, description, image, status, measure_variants, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,'active',$7,NOW(),NOW())
-      RETURNING *
-    `;
+  INSERT INTO products (
+    name, price, stock, category_id, description, image, status,
+    measure_variants, created_at, updated_at
+  )
+  VALUES ($1,$2,$3,$4,$5,$6,'active',$7::jsonb,NOW(),NOW())
+  RETURNING *
+`;
     const params = [
-      name,
-      Number(price) || 0,
+      String(name).trim(),
+      toNum(price) ?? 0,
       totalStock,
       category_id ? Number(category_id) : null,
       description || '',
@@ -485,7 +526,6 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
       mv.length ? JSON.stringify(mv) : null,
     ];
     const result = await pool.query(q, params);
-
     return res.status(201).json({ success: true, product: result.rows[0] });
   } catch (err) {
     console.error('POST /products error:', err);
@@ -493,6 +533,7 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
   }
 });
 
+// ========== UPDATE ==========
 app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -503,41 +544,37 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
     }
 
     const imagePath = req.file ? `/uploads/${req.file.filename}` : (oldImage || null);
-
-    // ✅ parse & สรุป
-    const mv = parseMeasureVariants(req.body.measureVariants);
-    const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : Number(stock) || 0;
+    const mv = parseMeasureVariants(req.body.measureVariants, req.body);
+    const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : toInt(stock);
 
     const q = `
-      UPDATE products
-      SET name=$1, price=$2, stock=$3, category_id=$4, description=$5, image=$6,
-          measure_variants=$7, updated_at=NOW()
-      WHERE id=$8
-      RETURNING *
+  UPDATE products
+  SET name=$1, price=$2, stock=$3, category_id=$4, description=$5, image=$6,
+      measure_variants=$7::jsonb, updated_at=NOW()
+  WHERE id=$8
+  RETURNING *
     `;
     const params = [
-      name,
-      Number(price) || 0,
+      String(name).trim(),
+      toNum(price) ?? 0,
       totalStock,
       category_id ? Number(category_id) : null,
       description || '',
       imagePath,
       mv.length ? JSON.stringify(mv) : null,
-      id,
+      Number(id),
     ];
     const result = await pool.query(q, params);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ message: 'ไม่พบสินค้า' });
     }
-
     return res.status(200).json({ success: true, product: result.rows[0] });
   } catch (err) {
     console.error('PUT /products error:', err);
     return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการบันทึกข้อมูลสินค้า' });
   }
 });
-
 app.delete('/api/admin/products/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
