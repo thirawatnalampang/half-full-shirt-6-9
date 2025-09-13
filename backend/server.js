@@ -795,17 +795,15 @@ app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
     client.release();
   }
 });
-// ผู้ใช้ยกเลิกออเดอร์ของตัวเอง
+/* ===================== ผู้ใช้ยกเลิก (คืนสต๊อกเสมอ) ===================== */
 app.patch('/api/orders/:id/cancel', async (req, res) => {
   const client = await pool.connect();
   try {
     const orderId = Number(req.params.id);
-    const restock = true; // ผู้ใช้ยกเลิก = คืนสต๊อกเสมอ
     if (!Number.isFinite(orderId)) return res.status(400).json({ message: 'invalid order id' });
 
     await client.query('BEGIN');
 
-    // ดึงออเดอร์และล็อก
     const oQ = await client.query(
       `SELECT id, status, cancelled_restocked_at
          FROM orders
@@ -814,103 +812,183 @@ app.patch('/api/orders/:id/cancel', async (req, res) => {
       [orderId]
     );
     if (!oQ.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'ไม่พบออเดอร์' }); }
-
     const order = oQ.rows[0];
 
-    // อนุญาตยกเลิกเฉพาะ pending / ready_to_ship
+    // ผู้ใช้ยกเลิก: อนุญาตเฉพาะสถานะที่ยังดำเนินการ (ไม่ใช่ shipped/done/cancelled)
     if (!['pending','ready_to_ship'].includes(order.status)) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
     }
 
-    // โหลดรายการสินค้า (ตาราง order_items ของคุณมีคอลัมน์ size, measures JSONB)
-    const itQ = await client.query(
-      `SELECT product_id, quantity, size, measures
-         FROM order_items
-        WHERE order_id=$1`,
-      [orderId]
-    );
-    const items = itQ.rows.map(r => {
-      const m = r.measures || {};
-      const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
-      return {
-        product_id: r.product_id,
-        quantity: Number(r.quantity || 0),
-        size: r.size ? String(r.size).trim() : null,
-        chest: num(m.chest_in ?? m.chest ?? m.chest_cm),
-        length: num(m.length_in ?? m.length ?? m.length_cm),
-      };
-    });
+    // คืนสต๊อก “เสมอ”
+    const items = await _loadOrderItemsForCancel(client, orderId);
+    await _restockItems(client, items);
 
-    // คืนสต๊อก (เหมือนฝั่ง admin)
-    const toNum = v => (Number.isFinite(Number(v)) ? Number(v) : null);
-    const normalizeMV = (mvRaw) => {
-      let mv = mvRaw;
-      if (!mv) return [];
-      if (typeof mv === 'string') { try { mv = JSON.parse(mv); } catch { mv = []; } }
-      if (!Array.isArray(mv)) return [];
-      return mv.map(v => ({
-        size: v?.size ?? null,
-        chest_in: toNum(v?.chest_in ?? v?.chest ?? v?.chest_cm),
-        length_in: toNum(v?.length_in ?? v?.length ?? v?.length_cm),
-        stock: Number(v?.stock || 0),
-      }));
-    };
-    const stockFromMV = (mv) => (Array.isArray(mv) ? mv : []).reduce((a,b)=>a+Number(b?.stock||0),0);
-
-    for (const it of items) {
-      if (!Number.isFinite(it.quantity) || it.quantity <= 0) continue;
-
-      const pQ = await client.query(
-        `SELECT id, stock, measure_variants
-           FROM products
-          WHERE id=$1
-          FOR UPDATE`,
-        [it.product_id]
-      );
-      if (!pQ.rowCount) continue;
-
-      const prod = pQ.rows[0];
-      let mv = normalizeMV(prod.measure_variants);
-
-      let idx = -1;
-      if (it.size) {
-        idx = mv.findIndex(v => String(v.size || '').toLowerCase() === it.size.toLowerCase());
-      }
-      if (idx < 0 && it.chest != null && it.length != null) {
-        const num = x => (Number.isFinite(Number(x)) ? Number(x) : null);
-        idx = mv.findIndex(v => num(v.chest_in) === it.chest && num(v.length_in) === it.length);
-      }
-
-      if (idx >= 0) {
-        mv[idx].stock = Number(mv[idx].stock || 0) + it.quantity;
-      } else {
-        mv.push({ size: it.size || null, chest_in: it.chest, length_in: it.length, stock: it.quantity });
-      }
-
-      const total = stockFromMV(mv);
-      await client.query(
-        `UPDATE products
-            SET stock=$1,
-                measure_variants=$2::jsonb,
-                updated_at=NOW()
-          WHERE id=$3`,
-        [total, mv.length ? JSON.stringify(mv) : null, it.product_id]
-      );
-    }
-
-    // อัปเดตสถานะ (ใช้คอลัมน์ที่มีจริง)
+    // อัปเดตสถานะ (not delete)
     const upd = await client.query(
       `UPDATE orders
           SET status='cancelled',
-              cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW())
+              cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW()),
+              updated_at = NOW()
         WHERE id=$1
         RETURNING id, status, cancelled_restocked_at`,
       [orderId]
     );
 
     await client.query('COMMIT');
-    return res.json({ success:true, status: upd.rows[0].status, cancelled_restocked_at: upd.rows[0].cancelled_restocked_at });
+    return res.json({
+      success: true,
+      status: upd.rows[0].status,
+      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
+    });
+  } catch (err) {
+    console.error('PATCH /api/orders/:id/cancel error:', err);
+    try { await client.query('ROLLBACK'); } catch {}
+    return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
+  } finally {
+    client.release();
+  }
+});
+/* ===================== Helpers (Stock) ===================== */
+const _toNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+function _normalizeMV(mvRaw) {
+  let mv = mvRaw;
+  if (!mv) return [];
+  if (typeof mv === 'string') { try { mv = JSON.parse(mv); } catch { mv = []; } }
+  if (!Array.isArray(mv)) return [];
+  return mv.map(v => ({
+    size:      v?.size ?? null,
+    chest_in:  _toNum(v?.chest_in ?? v?.chest ?? v?.chest_cm),
+    length_in: _toNum(v?.length_in ?? v?.length ?? v?.length_cm),
+    stock:     Number(v?.stock || 0),
+  }));
+}
+
+function _stockFromMV(mv) {
+  return (Array.isArray(mv) ? mv : []).reduce((a, v) => a + Number(v?.stock || 0), 0);
+}
+
+/* ===================== คืนสต๊อกทีละ product ===================== */
+async function _restockItems(client, items) {
+  for (const it of items) {
+    const qty = Number(it.quantity || 0);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+
+    const pQ = await client.query(
+      `SELECT id, stock, measure_variants
+         FROM products
+        WHERE id=$1
+        FOR UPDATE`,
+      [it.product_id]
+    );
+    if (!pQ.rowCount) continue;
+
+    const prod = pQ.rows[0];
+    let mv = _normalizeMV(prod.measure_variants);
+
+    let idx = -1;
+    if (it.size) {
+      const s = String(it.size).trim().toLowerCase();
+      idx = mv.findIndex(v => String(v.size || '').toLowerCase() === s);
+    }
+    if (idx < 0 && it.chest != null && it.length != null) {
+      idx = mv.findIndex(v =>
+        _toNum(v.chest_in) === _toNum(it.chest) &&
+        _toNum(v.length_in) === _toNum(it.length)
+      );
+    }
+
+    if (idx >= 0) {
+      mv[idx].stock = Number(mv[idx].stock || 0) + qty;
+    } else {
+      mv.push({
+        size: it.size || null,
+        chest_in: _toNum(it.chest),
+        length_in: _toNum(it.length),
+        stock: qty
+      });
+    }
+
+    const total = _stockFromMV(mv);
+    await client.query(
+      `UPDATE products
+          SET stock=$1,
+              measure_variants=$2::jsonb,
+              updated_at=NOW()
+        WHERE id=$3`,
+      [total, mv.length ? JSON.stringify(mv) : null, it.product_id]
+    );
+  }
+}
+
+/* ===================== โหลด order_items ===================== */
+async function _loadOrderItemsForCancel(client, orderId) {
+  const itQ = await client.query(
+    `SELECT product_id, quantity, size, measures
+       FROM order_items
+      WHERE order_id=$1`,
+    [orderId]
+  );
+  return itQ.rows.map(r => {
+    const m = r.measures || {};
+    const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
+    return {
+      product_id: r.product_id,
+      quantity: Number(r.quantity || 0),
+      size: r.size ? String(r.size).trim() : null,
+      chest: num(m.chest_in ?? m.chest ?? m.chest_cm),
+      length: num(m.length_in ?? m.length ?? m.length_cm),
+    };
+  });
+}
+
+/* ===================== ROUTE: ผู้ใช้ยกเลิก ===================== */
+app.patch('/api/orders/:id/cancel', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const orderId = Number(req.params.id);
+    if (!Number.isFinite(orderId)) return res.status(400).json({ message: 'invalid order id' });
+
+    await client.query('BEGIN');
+
+    const oQ = await client.query(
+      `SELECT id, status, cancelled_restocked_at
+         FROM orders
+        WHERE id=$1
+        FOR UPDATE`,
+      [orderId]
+    );
+    if (!oQ.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'ไม่พบออเดอร์' }); }
+    const order = oQ.rows[0];
+
+    if (!['pending','ready_to_ship'].includes(order.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
+    }
+
+    const items = await _loadOrderItemsForCancel(client, orderId);
+    await _restockItems(client, items);
+
+    const upd = await client.query(
+      `UPDATE orders
+          SET status='cancelled',
+              cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW()),
+              updated_at = NOW()
+        WHERE id=$1
+        RETURNING id, status, cancelled_restocked_at`,
+      [orderId]
+    );
+
+    await client.query('COMMIT');
+    return res.json({
+      success: true,
+      status: upd.rows[0].status,
+      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
+    });
   } catch (err) {
     console.error('PATCH /api/orders/:id/cancel error:', err);
     try { await client.query('ROLLBACK'); } catch {}
