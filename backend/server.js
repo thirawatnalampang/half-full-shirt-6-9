@@ -456,19 +456,61 @@ app.get('/api/admin/products', async (req, res) => {
   }
 });
 
-
-// ===== utils =====
-function toInt(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : 0;
-}
-function toNum(v) {
+/* ===================== Helpers (MV/Stock) ===================== */
+// ถ้ามี toNum/toInt อยู่แล้ว ข้ามส่วนนี้ได้
+const toNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+};
+const toInt = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+};
+
+// แปลง/ทำความสะอาด measure_variants ให้เป็นรูปแบบกลาง
+function normalizeMV(mvRaw) {
+  let mv = mvRaw;
+  if (!mv) return [];
+  if (typeof mv === 'string') { try { mv = JSON.parse(mv); } catch { mv = []; } }
+  if (!Array.isArray(mv)) return [];
+  return mv.map(v => ({
+    size:      v?.size ?? null,
+    chest_in:  Number.isFinite(Number(v?.chest_in ?? v?.chest ?? v?.chest_cm)) ? Number(v?.chest_in ?? v?.chest ?? v?.chest_cm) : null,
+    length_in: Number.isFinite(Number(v?.length_in ?? v?.length ?? v?.length_cm)) ? Number(v?.length_in ?? v?.length ?? v?.length_cm) : null,
+    stock:     Number(v?.stock ?? 0),
+  }));
 }
-function sumStockFromMeasures(mvArr) {
-  return mvArr.reduce((s, v) => s + (Number(v?.stock) || 0), 0);
+
+// รวม stock จาก measure_variants
+function stockFromMV(mv) {
+  return (Array.isArray(mv) ? mv : []).reduce((a, v) => a + Number(v?.stock || 0), 0);
 }
+
+// (ถ้ามี parseMeasureVariants/sumStockFromMeasures แล้ว ใช้ของคุณได้)
+// เวอร์ชันกันตาย (ใช้บน PUT ถ้าจำเป็น)
+function parseMeasureVariants(input, body = {}) {
+  let mv = input;
+  if (!mv && (body?.chest_in || body?.length_in)) {
+    const chestArr  = [].concat(body.chest_in || body.chest || body.chest_cm || []);
+    const lengthArr = [].concat(body.length_in || body.length || body.length_cm || []);
+    const stockArr  = [].concat(body.stock || []);
+    mv = chestArr.map((c, idx) => ({
+      chest_in:  toInt(c),
+      length_in: toInt(lengthArr[idx]),
+      stock:     toInt(stockArr[idx]),
+    }));
+  } else {
+    if (typeof mv === "string") { try { mv = JSON.parse(mv); } catch { mv = null; } }
+  }
+  if (!Array.isArray(mv)) return [];
+  return mv.map(v => ({
+    size:      v?.size ?? null,
+    chest_in:  toInt(v?.chest_in ?? v?.chest ?? v?.chest_cm),
+    length_in: toInt(v?.length_in ?? v?.length ?? v?.length_cm),
+    stock:     toInt(v?.stock),
+  }));
+}
+function sumStockFromMeasures(mv) { return stockFromMV(normalizeMV(mv)); }
 
 // ===== helpers: measure variants =====
 function parseMeasureVariants(input, body = {}) {
@@ -533,6 +575,7 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
   }
 });
 
+/* ===================== Products: UPDATE/DELETE/GET ===================== */
 // ========== UPDATE ==========
 app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
   try {
@@ -544,16 +587,18 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
     }
 
     const imagePath = req.file ? `/uploads/${req.file.filename}` : (oldImage || null);
-    const mv = parseMeasureVariants(req.body.measureVariants, req.body);
-    const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : toInt(stock);
+
+    // รับได้ทั้ง JSON string และฟอร์ม array -> normalize
+    const mvRaw = parseMeasureVariants(req.body.measureVariants, req.body);
+    const mvNorm = normalizeMV(mvRaw);
+    const totalStock = mvNorm.length > 0 ? stockFromMV(mvNorm) : toInt(stock);
 
     const q = `
-  UPDATE products
-  SET name=$1, price=$2, stock=$3, category_id=$4, description=$5, image=$6,
-      measure_variants=$7::jsonb, updated_at=NOW()
-  WHERE id=$8
-  RETURNING *
-    `;
+      UPDATE products
+      SET name=$1, price=$2, stock=$3, category_id=$4, description=$5, image=$6,
+          measure_variants=$7::jsonb, updated_at=NOW()
+      WHERE id=$8
+      RETURNING *`;
     const params = [
       String(name).trim(),
       toNum(price) ?? 0,
@@ -561,7 +606,7 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
       category_id ? Number(category_id) : null,
       description || '',
       imagePath,
-      mv.length ? JSON.stringify(mv) : null,
+      mvNorm.length ? JSON.stringify(mvNorm) : null,
       Number(id),
     ];
     const result = await pool.query(q, params);
@@ -575,6 +620,7 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
     return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการบันทึกข้อมูลสินค้า' });
   }
 });
+
 app.delete('/api/admin/products/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -597,8 +643,7 @@ app.get('/api/products/by-category/:categoryId', async (req, res) => {
       SELECT id, name, price, stock, description, image, category_id, measure_variants
       FROM products
       WHERE category_id = $1
-      ORDER BY id DESC
-    `;
+      ORDER BY id DESC`;
     const result = await pool.query(q, [categoryId]);
     return res.status(200).json(result.rows);
   } catch (err) {
@@ -607,15 +652,13 @@ app.get('/api/products/by-category/:categoryId', async (req, res) => {
   }
 });
 
-
 app.get('/api/admin/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const q = `
       SELECT id, name, price, stock, description, image, category_id, measure_variants
       FROM products
-      WHERE id = $1
-    `;
+      WHERE id = $1`;
     const result = await pool.query(q, [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ message: "ไม่พบสินค้า" });
@@ -628,7 +671,254 @@ app.get('/api/admin/products/:id', async (req, res) => {
 });
 
 
+// ================== CANCEL ORDER + RESTOCK ==================
+app.patch('/api/admin/orders/:id/cancel', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const orderId = Number(req.params.id);
+    const restock = !!req.body?.restock;
+    if (!Number.isFinite(orderId)) {
+      return res.status(400).json({ message: 'invalid order id' });
+    }
 
+    await client.query('BEGIN');
+
+    const oQ = await client.query(
+      `SELECT id, status, cancelled_restocked_at
+         FROM orders
+        WHERE id = $1
+        FOR UPDATE`,
+      [orderId]
+    );
+    if (!oQ.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'ไม่พบออเดอร์' });
+    }
+    const order = oQ.rows[0];
+    const alreadyRestocked = !!order.cancelled_restocked_at;
+
+    if (order.status === 'cancelled' || order.status === 'done') {
+      await client.query('ROLLBACK');
+      return res.json({ success: true, status: order.status, note: 'ออเดอร์อยู่ในสถานะสิ้นสุดแล้ว' });
+    }
+
+    // load order_items
+    const q = await client.query(
+      `SELECT product_id, quantity, size, measures
+         FROM order_items
+        WHERE order_id = $1`,
+      [orderId]
+    );
+    const items = q.rows.map(r => {
+      let chest = null, length = null;
+      if (r.measures && typeof r.measures === 'object') {
+        chest  = toNum(r.measures.chest_in  ?? r.measures.chest  ?? r.measures.chest_cm);
+        length = toNum(r.measures.length_in ?? r.measures.length ?? r.measures.length_cm);
+      }
+      return {
+        product_id: r.product_id,
+        quantity: Number(r.quantity || 0),
+        size: r.size ? String(r.size).trim() : null,
+        chest, length
+      };
+    });
+
+    if (restock && !alreadyRestocked && items?.length) {
+      for (const it of items) {
+        const pid = it.product_id;
+        const qty = Number(it.quantity || 0);
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+
+        const pQ = await client.query(
+          `SELECT id, stock, measure_variants
+             FROM products
+            WHERE id = $1
+            FOR UPDATE`,
+          [pid]
+        );
+        if (!pQ.rowCount) continue;
+
+        const prod = pQ.rows[0];
+        let mv = normalizeMV(prod.measure_variants);
+
+        let idx = -1;
+        if (it.size) {
+          idx = mv.findIndex(v => String(v.size || '').toLowerCase() === it.size.toLowerCase());
+        }
+        if (idx < 0 && it.chest != null && it.length != null) {
+          idx = mv.findIndex(v => toNum(v.chest_in) === it.chest && toNum(v.length_in) === it.length);
+        }
+
+        if (idx >= 0) {
+          mv[idx].stock = Number(mv[idx].stock || 0) + qty;
+        } else if (it.size || it.chest != null || it.length != null) {
+          mv.push({ size: it.size || null, chest_in: it.chest, length_in: it.length, stock: qty });
+        }
+
+        const totalFromMV = stockFromMV(mv);
+        const newStock = totalFromMV > 0 ? totalFromMV : Number(prod.stock || 0) + qty;
+
+        await client.query(
+          `UPDATE products
+              SET stock = $1,
+                  measure_variants = $2::jsonb,
+                  updated_at = NOW()
+            WHERE id = $3`,
+          [newStock, mv.length ? JSON.stringify(mv) : null, pid]
+        );
+      }
+    }
+
+    const upd = await client.query(
+      `UPDATE orders
+          SET status = 'cancelled',
+              cancelled_restocked_at = CASE
+                WHEN $2::boolean = true AND cancelled_restocked_at IS NULL THEN NOW()
+                ELSE cancelled_restocked_at
+              END
+        WHERE id = $1
+        RETURNING id, status, cancelled_restocked_at`,
+      [orderId, restock]
+    );
+
+    await client.query('COMMIT');
+    return res.json({
+      success: true,
+      status: upd.rows[0].status,
+      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
+    });
+  } catch (err) {
+    console.error('PATCH /api/admin/orders/:id/cancel error:', err);
+    try { await client.query('ROLLBACK'); } catch {}
+    return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
+  } finally {
+    client.release();
+  }
+});
+// ผู้ใช้ยกเลิกออเดอร์ของตัวเอง
+app.patch('/api/orders/:id/cancel', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const orderId = Number(req.params.id);
+    const restock = true; // ผู้ใช้ยกเลิก = คืนสต๊อกเสมอ
+    if (!Number.isFinite(orderId)) return res.status(400).json({ message: 'invalid order id' });
+
+    await client.query('BEGIN');
+
+    // ดึงออเดอร์และล็อก
+    const oQ = await client.query(
+      `SELECT id, status, cancelled_restocked_at
+         FROM orders
+        WHERE id=$1
+        FOR UPDATE`,
+      [orderId]
+    );
+    if (!oQ.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'ไม่พบออเดอร์' }); }
+
+    const order = oQ.rows[0];
+
+    // อนุญาตยกเลิกเฉพาะ pending / ready_to_ship
+    if (!['pending','ready_to_ship'].includes(order.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
+    }
+
+    // โหลดรายการสินค้า (ตาราง order_items ของคุณมีคอลัมน์ size, measures JSONB)
+    const itQ = await client.query(
+      `SELECT product_id, quantity, size, measures
+         FROM order_items
+        WHERE order_id=$1`,
+      [orderId]
+    );
+    const items = itQ.rows.map(r => {
+      const m = r.measures || {};
+      const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
+      return {
+        product_id: r.product_id,
+        quantity: Number(r.quantity || 0),
+        size: r.size ? String(r.size).trim() : null,
+        chest: num(m.chest_in ?? m.chest ?? m.chest_cm),
+        length: num(m.length_in ?? m.length ?? m.length_cm),
+      };
+    });
+
+    // คืนสต๊อก (เหมือนฝั่ง admin)
+    const toNum = v => (Number.isFinite(Number(v)) ? Number(v) : null);
+    const normalizeMV = (mvRaw) => {
+      let mv = mvRaw;
+      if (!mv) return [];
+      if (typeof mv === 'string') { try { mv = JSON.parse(mv); } catch { mv = []; } }
+      if (!Array.isArray(mv)) return [];
+      return mv.map(v => ({
+        size: v?.size ?? null,
+        chest_in: toNum(v?.chest_in ?? v?.chest ?? v?.chest_cm),
+        length_in: toNum(v?.length_in ?? v?.length ?? v?.length_cm),
+        stock: Number(v?.stock || 0),
+      }));
+    };
+    const stockFromMV = (mv) => (Array.isArray(mv) ? mv : []).reduce((a,b)=>a+Number(b?.stock||0),0);
+
+    for (const it of items) {
+      if (!Number.isFinite(it.quantity) || it.quantity <= 0) continue;
+
+      const pQ = await client.query(
+        `SELECT id, stock, measure_variants
+           FROM products
+          WHERE id=$1
+          FOR UPDATE`,
+        [it.product_id]
+      );
+      if (!pQ.rowCount) continue;
+
+      const prod = pQ.rows[0];
+      let mv = normalizeMV(prod.measure_variants);
+
+      let idx = -1;
+      if (it.size) {
+        idx = mv.findIndex(v => String(v.size || '').toLowerCase() === it.size.toLowerCase());
+      }
+      if (idx < 0 && it.chest != null && it.length != null) {
+        const num = x => (Number.isFinite(Number(x)) ? Number(x) : null);
+        idx = mv.findIndex(v => num(v.chest_in) === it.chest && num(v.length_in) === it.length);
+      }
+
+      if (idx >= 0) {
+        mv[idx].stock = Number(mv[idx].stock || 0) + it.quantity;
+      } else {
+        mv.push({ size: it.size || null, chest_in: it.chest, length_in: it.length, stock: it.quantity });
+      }
+
+      const total = stockFromMV(mv);
+      await client.query(
+        `UPDATE products
+            SET stock=$1,
+                measure_variants=$2::jsonb,
+                updated_at=NOW()
+          WHERE id=$3`,
+        [total, mv.length ? JSON.stringify(mv) : null, it.product_id]
+      );
+    }
+
+    // อัปเดตสถานะ (ใช้คอลัมน์ที่มีจริง)
+    const upd = await client.query(
+      `UPDATE orders
+          SET status='cancelled',
+              cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW())
+        WHERE id=$1
+        RETURNING id, status, cancelled_restocked_at`,
+      [orderId]
+    );
+
+    await client.query('COMMIT');
+    return res.json({ success:true, status: upd.rows[0].status, cancelled_restocked_at: upd.rows[0].cancelled_restocked_at });
+  } catch (err) {
+    console.error('PATCH /api/orders/:id/cancel error:', err);
+    try { await client.query('ROLLBACK'); } catch {}
+    return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
+  } finally {
+    client.release();
+  }
+});
 
 // ===== util =====
 const crypto = require('crypto');

@@ -674,6 +674,32 @@ function OrdersPanel() {
 async function saveStatus() {
   const oid = detail?.order?.id;
   if (!oid) return;
+
+  // ถ้าเลือกว่า "ยกเลิก" → ใช้ /cancel (จะถามคืนสต๊อกและทำคืนสต๊อกให้)
+  if (statusDraft === 'cancelled') {
+    const restock = window.confirm('ต้องการคืนสต็อกสินค้าด้วยหรือไม่? กด OK = คืนสต็อก, Cancel = ไม่คืน');
+
+    try {
+      const res = await fetch(`${API_ORDERS}/${oid}/cancel`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ restock }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "ยกเลิกออเดอร์ไม่สำเร็จ");
+
+      // อัปเดต state ให้ UI สอดคล้อง
+      setOrders(os => os.map(o => o.id === oid ? { ...o, status: data.status } : o));
+      setDetail(d => d ? { ...d, order: { ...d.order, status: data.status } } : d);
+
+      alert("ยกเลิกออเดอร์เรียบร้อย" + (restock ? " (คืนสต๊อกแล้ว)" : ""));
+    } catch (e) {
+      alert(e.message);
+    }
+    return; // จบ ไม่ต้องยิง /status ต่อ
+  }
+
+  // กรณีสถานะอื่น ๆ ใช้ /status ตามเดิม
   setSavingStatus(true);
   try {
     const res = await fetch(`${API_ORDERS}/${oid}/status`, {
@@ -695,7 +721,6 @@ async function saveStatus() {
           : o
       )
     );
-
     setDetail(d =>
       d
         ? {

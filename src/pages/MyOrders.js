@@ -161,21 +161,26 @@ export default function MyOrders() {
   }, [user]);
 
   async function cancelOrder(orderId) {
-    if (!window.confirm("ยืนยันยกเลิกคำสั่งซื้อนี้หรือไม่?")) return;
-    try {
-      const res = await fetch(`http://localhost:3000/api/orders/${orderId}/cancel`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ restock: true }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "ยกเลิกไม่สำเร็จ");
-      setOrders((os) => os.map((x) => (x.id === orderId ? { ...x, status: data.status } : x)));
-      alert("ยกเลิกออเดอร์เรียบร้อย");
-    } catch (e) {
-      alert(e.message);
-    }
+  if (!window.confirm("ยืนยันยกเลิกคำสั่งซื้อนี้หรือไม่?")) return;
+  try {
+    const res = await fetch(`http://localhost:3000/api/orders/${orderId}/cancel`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}), // public route ไม่ต้องส่ง restock
+    });
+
+    // กันกรณีตอบกลับไม่ใช่ JSON
+    const ct = res.headers.get('content-type') || '';
+    const data = ct.includes('application/json') ? await res.json() : { message: await res.text() };
+
+    if (!res.ok) throw new Error(data?.message || "ยกเลิกไม่สำเร็จ");
+
+    setOrders(os => os.map(o => o.id === orderId ? { ...o, status: data.status } : o));
+    alert("ยกเลิกออเดอร์เรียบร้อย");
+  } catch (e) {
+    alert(e.message);
   }
+}
 
   // นับจำนวนต่อสถานะ
   const statusCounts = useMemo(() => {
