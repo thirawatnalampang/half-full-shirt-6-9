@@ -165,8 +165,8 @@ export default function MyOrders() {
     })();
   }, [user]);
 
-  // —— ซ่อนปุ่มยกเลิกแบบ 1: ให้ยกเลิกได้เฉพาะสถานะ pending เท่านั้น ——
-  const canCancel = (status) => status === "pending";
+  // —— ยกเลิกได้ทั้ง pending และ ready_to_ship —— 
+const canCancel = (status) => ["pending", "ready_to_ship"].includes(status);
 
   async function cancelOrder(orderId) {
     if (!window.confirm("ยืนยันยกเลิกคำสั่งซื้อนี้หรือไม่?")) return;
