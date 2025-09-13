@@ -23,7 +23,7 @@ const STATUS_CONFIG = {
   paid: {
     label: "ชำระเงินแล้ว",
     activeClass: "bg-sky-600 text-white border-sky-600 hover:bg-sky-700",
-    badgeClass: "bg-sky-600 text-white", // แก้บั๊ก text-white
+    badgeClass: "bg-sky-600 text-white",
   },
   shipped: {
     label: "จัดส่งแล้ว",
@@ -48,6 +48,11 @@ const PAY_LABELS = {
   submitted: "ส่งสลิปแล้ว",
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
+};
+
+const PAYMENT_METHOD_TH = {
+  cod: "เก็บเงินปลายทาง",
+  transfer: "โอนเงิน/สลิป",
 };
 
 /** ==== ค่ายขนส่ง + สร้างลิงก์ติดตาม ==== */
@@ -160,27 +165,34 @@ export default function MyOrders() {
     })();
   }, [user]);
 
+  // —— ซ่อนปุ่มยกเลิกแบบ 1: ให้ยกเลิกได้เฉพาะสถานะ pending เท่านั้น ——
+  const canCancel = (status) => status === "pending";
+
   async function cancelOrder(orderId) {
-  if (!window.confirm("ยืนยันยกเลิกคำสั่งซื้อนี้หรือไม่?")) return;
-  try {
-    const res = await fetch(`http://localhost:3000/api/orders/${orderId}/cancel`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}), // public route ไม่ต้องส่ง restock
-    });
+    if (!window.confirm("ยืนยันยกเลิกคำสั่งซื้อนี้หรือไม่?")) return;
+    try {
+      const res = await fetch(`http://localhost:3000/api/orders/${orderId}/cancel`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}), // public route ไม่ต้องส่ง restock
+      });
 
-    // กันกรณีตอบกลับไม่ใช่ JSON
-    const ct = res.headers.get('content-type') || '';
-    const data = ct.includes('application/json') ? await res.json() : { message: await res.text() };
+      // กันกรณีตอบกลับไม่ใช่ JSON
+      const ct = res.headers.get("content-type") || "";
+      const data = ct.includes("application/json")
+        ? await res.json()
+        : { message: await res.text() };
 
-    if (!res.ok) throw new Error(data?.message || "ยกเลิกไม่สำเร็จ");
+      if (!res.ok) throw new Error(data?.message || "ยกเลิกไม่สำเร็จ");
 
-    setOrders(os => os.map(o => o.id === orderId ? { ...o, status: data.status } : o));
-    alert("ยกเลิกออเดอร์เรียบร้อย");
-  } catch (e) {
-    alert(e.message);
+      setOrders((os) =>
+        os.map((o) => (o.id === orderId ? { ...o, status: data.status } : o))
+      );
+      alert("ยกเลิกออเดอร์เรียบร้อย");
+    } catch (e) {
+      alert(e.message);
+    }
   }
-}
 
   // นับจำนวนต่อสถานะ
   const statusCounts = useMemo(() => {
@@ -314,7 +326,10 @@ export default function MyOrders() {
 
                   {(o.payment_method || o.payment_status) && (
                     <div className="text-sm text-gray-700 mt-1">
-                      วิธีชำระเงิน: <span className="font-medium">{o.payment_method || "-"}</span>
+                      วิธีชำระเงิน:{" "}
+                      <span className="font-medium">
+                        {PAYMENT_METHOD_TH[o.payment_method] || o.payment_method || "-"}
+                      </span>
                       {o.payment_status && (
                         <span className="ml-3">
                           สถานะชำระเงิน:{" "}
@@ -349,7 +364,7 @@ export default function MyOrders() {
                     {STATUS_CONFIG[o.status]?.label ?? o.status ?? "-"}
                   </span>
 
-                  {["pending", "ready_to_ship"].includes(o.status) && (
+                  {canCancel(o.status) && (
                     <button
                       onClick={() => cancelOrder(o.id)}
                       className="px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-black text-white text-sm transition"

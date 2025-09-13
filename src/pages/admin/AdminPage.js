@@ -1510,7 +1510,7 @@ function DashboardPanel() {
 
       {/* ✅ Recent orders – 10 ออเดอร์ล่าสุด */}
       <Card>
-        <div className="mb-2 font-semibold text-white">ออเดอร์ล่าสุด</div>
+        <div className="mb-2 font-semibold text-white">ออเดอร์ที่สำเร็จล่าสุด</div>
         <div className="relative">
           {loading ? (
             <div className="h-40"><Skeleton h={160} /></div>
