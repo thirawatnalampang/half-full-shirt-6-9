@@ -474,7 +474,6 @@ function normalizeMV(mvRaw) {
   if (typeof mv === 'string') { try { mv = JSON.parse(mv); } catch { mv = []; } }
   if (!Array.isArray(mv)) return [];
   return mv.map(v => ({
-    size:      v?.size ?? null,
     chest_in:  Number.isFinite(Number(v?.chest_in ?? v?.chest ?? v?.chest_cm)) ? Number(v?.chest_in ?? v?.chest ?? v?.chest_cm) : null,
     length_in: Number.isFinite(Number(v?.length_in ?? v?.length ?? v?.length_cm)) ? Number(v?.length_in ?? v?.length ?? v?.length_cm) : null,
     stock:     Number(v?.stock ?? 0),
@@ -486,30 +485,7 @@ function stockFromMV(mv) {
   return (Array.isArray(mv) ? mv : []).reduce((a, v) => a + Number(v?.stock || 0), 0);
 }
 
-// (ถ้ามี parseMeasureVariants/sumStockFromMeasures แล้ว ใช้ของคุณได้)
-// เวอร์ชันกันตาย (ใช้บน PUT ถ้าจำเป็น)
-function parseMeasureVariants(input, body = {}) {
-  let mv = input;
-  if (!mv && (body?.chest_in || body?.length_in)) {
-    const chestArr  = [].concat(body.chest_in || body.chest || body.chest_cm || []);
-    const lengthArr = [].concat(body.length_in || body.length || body.length_cm || []);
-    const stockArr  = [].concat(body.stock || []);
-    mv = chestArr.map((c, idx) => ({
-      chest_in:  toInt(c),
-      length_in: toInt(lengthArr[idx]),
-      stock:     toInt(stockArr[idx]),
-    }));
-  } else {
-    if (typeof mv === "string") { try { mv = JSON.parse(mv); } catch { mv = null; } }
-  }
-  if (!Array.isArray(mv)) return [];
-  return mv.map(v => ({
-    size:      v?.size ?? null,
-    chest_in:  toInt(v?.chest_in ?? v?.chest ?? v?.chest_cm),
-    length_in: toInt(v?.length_in ?? v?.length ?? v?.length_cm),
-    stock:     toInt(v?.stock),
-  }));
-}
+
 function sumStockFromMeasures(mv) { return stockFromMV(normalizeMV(mv)); }
 
 // ===== helpers: measure variants =====
@@ -861,10 +837,9 @@ function _normalizeMV(mvRaw) {
   if (typeof mv === 'string') { try { mv = JSON.parse(mv); } catch { mv = []; } }
   if (!Array.isArray(mv)) return [];
   return mv.map(v => ({
-    size:      v?.size ?? null,
-    chest_in:  _toNum(v?.chest_in ?? v?.chest ?? v?.chest_cm),
-    length_in: _toNum(v?.length_in ?? v?.length ?? v?.length_cm),
-    stock:     Number(v?.stock || 0),
+    chest_in:  Number(v?.chest_in ?? v?.chest ?? v?.chest_cm),
+    length_in: Number(v?.length_in ?? v?.length ?? v?.length_cm),
+    stock:     Number(v?.stock ?? 0),
   }));
 }
 
