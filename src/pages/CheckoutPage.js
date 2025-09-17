@@ -305,43 +305,79 @@ export default function CheckoutPage() {
             </div>
           </section>
 
-          {/* วิธีชำระเงิน */}
-          <section className="bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-5">
-            <h2 className="text-lg font-bold mb-4">วิธีชำระเงิน</h2>
-            <div className="space-y-3">
-              <label className="flex items-center gap-3">
-                <input type="radio" name="pay" value="cod"
-                  checked={paymentMethod === 'cod'} onChange={() => setPaymentMethod('cod')} />
-                <span>ชำระเงินปลายทาง (COD)</span>
-              </label>
-              <label className="flex items-center gap-3">
-                <input type="radio" name="pay" value="transfer"
-                  checked={paymentMethod === 'transfer'} onChange={() => setPaymentMethod('transfer')} />
-                <span>โอนผ่านธนาคาร4595458995959595 กสิกร/พร้อมเพย์ 098-840-5158</span>
-              </label>
-            </div>
+       {/* วิธีชำระเงิน */}
+<section className="bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-5">
+  <h2 className="text-lg font-bold mb-4">วิธีชำระเงิน</h2>
+  <div className="space-y-3">
+    <label className="flex items-center gap-3">
+      <input
+        type="radio"
+        name="pay"
+        value="cod"
+        checked={paymentMethod === 'cod'}
+        onChange={() => setPaymentMethod('cod')}
+      />
+      <span>ชำระเงินปลายทาง (COD)</span>
+    </label>
+    <label className="flex items-center gap-3">
+      <input
+        type="radio"
+        name="pay"
+        value="transfer"
+        checked={paymentMethod === 'transfer'}
+        onChange={() => setPaymentMethod('transfer')}
+      />
+      <span>โอนผ่านธนาคาร / พร้อมเพย์</span>
+    </label>
+  </div>
 
-            {paymentMethod === 'transfer' && (
-              <div className="mt-4 space-y-3 rounded-xl border border-neutral-200 dark:border-neutral-700 p-4 bg-neutral-50 dark:bg-neutral-900/40">
-                <div>
-                  <label className="block text-sm mb-1">แนบรูปสลิป *</label>
-                  <input type="file" accept="image/*" onChange={(e) => setSlipFile(e.target.files?.[0] || null)} />
-                </div>
-                <div>
-                  <label className="block text-sm mb-1">ยอดที่โอน </label>
-                  <input
-                    value={slipAmount}
-                    onChange={(e) => setSlipAmount(e.target.value)}
-                    placeholder=""
-                    className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
-                  />
-                </div>
-                <p className="text-xs text-neutral-500">
-                  หลังส่งคำสั่งซื้อ สลิปจะถูกอัปโหลดให้อัตโนมัติและรอแอดมินตรวจสอบ
-                </p>
-              </div>
-            )}
-          </section>
+  {paymentMethod === 'transfer' && (
+    <div className="mt-4 space-y-4 rounded-xl border border-neutral-200 dark:border-neutral-700 p-4 bg-neutral-50 dark:bg-neutral-900/40">
+      {/* ✅ ข้อมูลบัญชี + QR */}
+      <div className="text-center">
+        <div className="text-sm">
+          <div className="font-semibold">กสิกรไทย / KBank</div>
+          <div>เลขบัญชี: <span className="font-mono">459-545-7625-9595</span></div>
+          <div>พร้อมเพย์: <span className="font-mono">098-840-5158</span></div>
+        </div>
+
+        <p className="text-sm text-neutral-600 mt-2">สแกน QR เพื่อชำระเงิน</p>
+        <img
+         src="/assets/image/qrcode.jpg"
+  alt="QR Code สำหรับโอนเงิน"
+  className="w-48 h-48 mx-auto rounded-xl border shadow-sm"
+          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+        />
+        <p className="mt-2 text-xs text-neutral-500">
+          * หลังโอนเงินแล้ว กรุณาแนบสลิปเพื่อยืนยัน
+        </p>
+      </div>
+
+      {/* แนบสลิป + ยอดที่โอน */}
+      <div>
+        <label className="block text-sm mb-1">แนบรูปสลิป *</label>
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => setSlipFile(e.target.files?.[0] || null)}
+        />
+      </div>
+      <div>
+        <label className="block text-sm mb-1">ยอดที่โอน</label>
+        <input
+          value={slipAmount}
+          onChange={(e) => setSlipAmount(e.target.value)}
+          placeholder=""
+          className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+        />
+      </div>
+
+      <p className="text-xs text-neutral-500">
+        หลังส่งคำสั่งซื้อ สลิปจะถูกอัปโหลดให้อัตโนมัติและรอแอดมินตรวจสอบ
+      </p>
+    </div>
+  )}
+</section>
         </div>
 
         {/* ขวา: สรุปคำสั่งซื้อ */}
