@@ -28,7 +28,25 @@ const slipStorage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
 });
 const slipUpload = multer({ storage: slipStorage });
+// ====== Profile Upload (ไปที่ uploads/profile) ======
+const profileDir = path.join(uploadDir, 'profile');
+if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
 
+const profileStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, profileDir),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
+});
+const profileUpload = multer({ storage: profileStorage });
+
+// ====== Product Upload (ไปที่ uploads/products) ======
+const productDir = path.join(uploadDir, 'products');
+if (!fs.existsSync(productDir)) fs.mkdirSync(productDir, { recursive: true });
+
+const productStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, productDir),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
+});
+const productUpload = multer({ storage: productStorage });
 // serve static files
 app.use('/uploads', express.static(uploadDir));
 app.use(cors());
@@ -105,13 +123,17 @@ const genOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
 const now = () => Date.now();
 const iso = (t = Date.now()) => new Date(t).toISOString();
 const cleanupOtp = (email) => { delete otpStore[email]; };
-
 /* ====== อัปโหลดรูปโปรไฟล์ ====== */
-app.post('/api/profile/upload', upload.single('image'), (req, res) => {
-  if (!req.file) return res.status(400).json({ message: 'ไม่มีไฟล์อัปโหลด' });
-  res.json({ url: `/uploads/${req.file.filename}` });
-});
+app.post('/api/profile/upload', profileUpload.single('image'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'ไม่มีไฟล์อัปโหลด' });
+  }
 
+  // ✅ ส่ง URL ที่ชี้ไปยังโฟลเดอร์ profile
+  res.json({
+    url: `/uploads/profile/${req.file.filename}`
+  });
+});
 
 
 /* ====== ส่ง OTP (สมัครสมาชิก) — ตอบทันที + ส่งหลังบ้าน ====== */
@@ -515,7 +537,7 @@ function parseMeasureVariants(input, body = {}) {
 }
 
 // ========== CREATE ==========
-app.post('/api/admin/products', upload.single('image'), async (req, res) => {
+app.post('/api/admin/products', productUpload.single('image'), async (req, res) => {
   try {
     const { name, price, stock, category_id, description } = req.body;
     if (!name || String(name).trim() === '') {
@@ -524,16 +546,16 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
 
     const mv = parseMeasureVariants(req.body.measureVariants, req.body);
     const totalStock = mv.length > 0 ? sumStockFromMeasures(mv) : toInt(stock);
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
+    const imagePath = req.file ? `/uploads/products/${req.file.filename}` : null;
 
     const q = `
-  INSERT INTO products (
-    name, price, stock, category_id, description, image, status,
-    measure_variants, created_at, updated_at
-  )
-  VALUES ($1,$2,$3,$4,$5,$6,'active',$7::jsonb,NOW(),NOW())
-  RETURNING *
-`;
+      INSERT INTO products (
+        name, price, stock, category_id, description, image, status,
+        measure_variants, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,'active',$7::jsonb,NOW(),NOW())
+      RETURNING *
+    `;
     const params = [
       String(name).trim(),
       toNum(price) ?? 0,
@@ -551,9 +573,8 @@ app.post('/api/admin/products', upload.single('image'), async (req, res) => {
   }
 });
 
-/* ===================== Products: UPDATE/DELETE/GET ===================== */
 // ========== UPDATE ==========
-app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
+app.put('/api/admin/products/:id', productUpload.single('image'), async (req, res) => {
   try {
     const { id } = req.params;
     const { name, price, stock, category_id, description, oldImage } = req.body;
@@ -562,9 +583,9 @@ app.put('/api/admin/products/:id', upload.single('image'), async (req, res) => {
       return res.status(400).json({ message: 'ชื่อสินค้าเป็นค่าว่างไม่ได้' });
     }
 
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : (oldImage || null);
+    const imagePath = req.file ? `/uploads/products/${req.file.filename}` : (oldImage || null);
 
-    // รับได้ทั้ง JSON string และฟอร์ม array -> normalize
+    // normalize measure variants
     const mvRaw = parseMeasureVariants(req.body.measureVariants, req.body);
     const mvNorm = normalizeMV(mvRaw);
     const totalStock = mvNorm.length > 0 ? stockFromMV(mvNorm) : toInt(stock);
