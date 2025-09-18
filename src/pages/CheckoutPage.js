@@ -36,7 +36,7 @@ export default function CheckoutPage() {
   // โปรไฟล์
   const [profile, setProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
-  const [saveToProfile, setSaveToProfile] = useState(true);
+  const [saveToProfile, setSaveToProfile] = useState(false);
 
   // ฟอร์มสลิป
   const [slipFile, setSlipFile] = useState(null);

@@ -886,7 +886,12 @@ async function saveStatus() {
                   <td className="px-4 py-3 text-white font-medium">
                     {o.order_code ? o.order_code : `#${o.id}`}
                   </td>
-                  <td className="px-4 py-3 text-neutral-300">{o.full_name || o.email || "-"}</td>
+                  <td className="px-4 py-3 text-neutral-300">
+  <div className="flex flex-col">
+    <span className="font-medium text-white">{o.full_name || "-"}</span>
+    <span className="text-xs text-neutral-400">{o.email || "-"}</span>
+  </div>
+</td>
 
                   {/* สถานะ: ไม่หักบรรทัด */}
                   <td className="px-4 py-3 whitespace-nowrap">

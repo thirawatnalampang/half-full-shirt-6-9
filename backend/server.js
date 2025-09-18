@@ -1262,11 +1262,22 @@ app.post('/api/orders', async (req, res) => {
 app.get("/api/admin/orders", async (req, res) => {
   try {
     const q = `
-      SELECT id, order_code, full_name, email, total_price, status, created_at,
-             payment_status, slip_image,
-             tracking_carrier, tracking_code
-      FROM orders
-      ORDER BY created_at DESC
+      SELECT
+  o.id,
+  o.order_code,
+  o.full_name,
+  o.email,
+  o.total_price,
+  o.status,
+  o.created_at,
+  o.payment_status,
+  o.slip_image,
+  o.tracking_carrier,
+  o.tracking_code,
+  u.email AS buyer_email 
+FROM orders AS o
+LEFT JOIN users AS u ON o.user_id = u.id
+ORDER BY o.created_at DESC
     `;
     const r = await pool.query(q);
     res.json(r.rows);
@@ -1287,7 +1298,7 @@ app.get("/api/admin/orders/:id", async (req, res) => {
              subtotal, shipping, total_price, total_qty, note,
              status, created_at,
              payment_status, paid_at, payment_amount, slip_image,
-             tracking_carrier, tracking_code
+             tracking_carrier, tracking_code 
       FROM orders
       WHERE id = $1
     `;
