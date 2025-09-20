@@ -1072,6 +1072,7 @@ async function saveStatus() {
                 <div className="text-neutral-300 text-sm">{detail.order.phone || "-"}</div>
                 <div className="text-neutral-300 text-sm">
                   {(detail.order.address_line || "-")}
+                  {detail.order.subdistrict ? ` ${detail.order.subdistrict}` : ""}
                   {detail.order.district ? ` ${detail.order.district}` : ""}
                   {detail.order.province ? ` ${detail.order.province}` : ""}
                   {detail.order.postcode ? ` ${detail.order.postcode}` : ""}

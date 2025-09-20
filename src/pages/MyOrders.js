@@ -1,414 +1,633 @@
-// src/pages/MyOrders.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+// src/pages/MyOrdersPage.jsx
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import {
+  FiRefreshCw, FiAlertCircle, FiCheckCircle, FiClock, FiX,
+  FiTruck, FiPackage, FiCopy, FiUser, FiMapPin, FiPhone
+} from "react-icons/fi";
 
-const API_ORDERS = "http://localhost:3000/api/my-orders";
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:3000";
+const FALLBACK_IMG = "https://placehold.co/48x48?text=IMG";
 
-const CURRENCY = (n) =>
+const formatTHB = (n) =>
   new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(Number(n || 0));
 
-/** สี/ป้ายสำหรับแต่ละสถานะ (อ่านง่ายบนพื้นหลังสว่าง) */
-const STATUS_CONFIG = {
-  pending: {
-    label: "รอดำเนินการ",
-    activeClass: "bg-gray-700 text-white border-gray-700 hover:bg-gray-800",
-    badgeClass: "bg-gray-700 text-white",
-  },
-  ready_to_ship: {
-    label: "รอจัดส่ง",
-    activeClass: "bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700",
-    badgeClass: "bg-indigo-600 text-white",
-  },
-  paid: {
-    label: "ชำระเงินแล้ว",
-    activeClass: "bg-sky-600 text-white border-sky-600 hover:bg-sky-700",
-    badgeClass: "bg-sky-600 text-white",
-  },
-  shipped: {
-    label: "จัดส่งแล้ว",
-    activeClass: "bg-amber-500 text-black border-amber-500 hover:bg-amber-600",
-    badgeClass: "bg-amber-500 text-black",
-  },
-  done: {
-    label: "สำเร็จ",
-    activeClass: "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700",
-    badgeClass: "bg-emerald-600 text-white",
-  },
-  cancelled: {
-    label: "ยกเลิก",
-    activeClass: "bg-rose-600 text-white border-rose-600 hover:bg-rose-700",
-    badgeClass: "bg-rose-600 text-white",
-  },
+const STATUS_TH = {
+  pending: "รอดำเนินการ",
+  ready_to_ship: "รอจัดส่ง",
+  shipped: "จัดส่งแล้ว",
+  done: "สำเร็จ",
+  cancelled: "ยกเลิก",
 };
-const ALL_STATUSES = Object.keys(STATUS_CONFIG);
-
-const PAY_LABELS = {
+const PAYMENT_TH = {
   unpaid: "ยังไม่ชำระ",
   submitted: "ส่งสลิปแล้ว",
   paid: "ชำระแล้ว",
   rejected: "สลิปถูกปฏิเสธ",
 };
 
-const PAYMENT_METHOD_TH = {
-  cod: "เก็บเงินปลายทาง",
-  transfer: "โอนเงิน/สลิป",
-};
+// utils
+const cx = (...c) => c.filter(Boolean).join(" ");
+const statusPillColor = (s) => ({
+  pending: "bg-amber-100 text-amber-800 border-amber-200",
+  ready_to_ship: "bg-violet-100 text-violet-800 border-violet-200",
+  shipped: "bg-sky-100 text-sky-700 border-sky-200",
+  done: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  cancelled: "bg-rose-100 text-rose-700 border-rose-200",
+}[s] || "bg-neutral-100 text-neutral-700 border-neutral-200");
 
-/** ==== ค่ายขนส่ง + สร้างลิงก์ติดตาม ==== */
-const TRACK_CARRIERS = {
-  thailandpost: "ไปรษณีย์ไทย (Thailand Post)",
-  kerry: "Kerry Express",
-  flash: "Flash Express",
-  jnt: "J&T Express",
-  best: "BEST Express",
-  ninjavan: "NinjaVan",
-};
+const payPillColor = (p) => ({
+  unpaid: "bg-neutral-100 text-neutral-800 border-neutral-200",
+  submitted: "bg-amber-100 text-amber-800 border-amber-200",
+  paid: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  rejected: "bg-rose-100 text-rose-800 border-rose-200",
+}[p || "unpaid"]);
 
+const ORDER_FLOW = ["pending", "ready_to_ship", "shipped", "done"];
+const ORDER_FLOW_LABELS = ["รับคำสั่งซื้อ", "เตรียมจัดส่ง", "จัดส่งแล้ว", "สำเร็จ"];
+
+/* ===== Tracking helpers ===== */
 const trackingUrl = (carrier, code) => {
+  if (!code) return null;
   const c = String(carrier || "").toLowerCase();
-  const t = String(code || "").trim();
-  if (!t) return null;
-  switch (c) {
-    case "thailandpost":
-      return `https://track.thailandpost.com/?trackNumber=${encodeURIComponent(t)}`;
-    case "kerry":
-      return `https://th.kerryexpress.com/th/track/?track=${encodeURIComponent(t)}`;
-    case "flash":
-      return `https://www.flashexpress.com/fle/tracking?se=${encodeURIComponent(t)}`;
-    case "jnt":
-      return `https://www.jtexpress.co.th/service/track/${encodeURIComponent(t)}`;
-    case "best":
-      return `https://www.best-inc.co.th/track?billcode=${encodeURIComponent(t)}`;
-    case "ninjavan":
-      return `https://www.ninjavan.co/th-th/tracking?id=${encodeURIComponent(t)}`;
-    default:
-      return `https://www.track.in.th/th/tracking/${encodeURIComponent(t)}`;
-  }
+  const q = encodeURIComponent(code);
+  if (c.includes("kerry")) return `https://th.kerryexpress.com/th/track/?track=${q}`;
+  if (c.includes("thai") || c.includes("ems")) return `https://track.thailandpost.co.th/?trackNumber=${q}`;
+  if (c.includes("j&t") || c.includes("jnt")) return `https://www.jtexpress.co.th/index/query/gzquery.html?billcode=${q}`;
+  if (c.includes("flash")) return `https://www.flashexpress.com/fle/tracking?se=${q}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(`${carrier || ""} ${code}`)}`;
 };
 
-/** ปุ่มคัดลอกข้อความเล็กๆ */
-function Copyable({ text, children }) {
-  const onCopy = () => {
-    if (!text) return;
-    navigator.clipboard?.writeText(String(text)).then(() => {
-      alert("คัดลอกแล้ว");
-    });
-  };
+/* ===== Stop events helper (กันคลิกไหลออกไปโดน <Link>) ===== */
+function StopBubble({ children }) {
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
   return (
-    <button
-      onClick={onCopy}
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-gray-300 hover:bg-gray-100 active:scale-[0.99] transition"
-      title="คัดลอก"
+    <span
+      onClick={stop}
+      onMouseDown={stop}
+      onMouseUp={stop}
+      onTouchStart={stop}
+      onTouchEnd={stop}
+      className="select-text cursor-text"
     >
       {children}
+    </span>
+  );
+}
+
+/* ===== Copyable (กัน event + คัดลอก) ===== */
+function Copyable({ text, children, className }) {
+  if (!text) return null;
+  const doCopy = async () => {
+    try { await navigator.clipboard?.writeText(String(text)); alert("คัดลอกแล้ว"); }
+    catch (e) { console.error("copy failed:", e); }
+  };
+  const stopAll = (e) => { e.preventDefault(); e.stopPropagation(); };
+  return (
+    <button
+      type="button"
+      onClick={(e)=>{ stopAll(e); doCopy(); }}
+      onMouseDown={stopAll}
+      onMouseUp={stopAll}
+      onKeyDown={(e)=>{ if(e.key===" "||e.key==="Enter"){ stopAll(e); doCopy(); } }}
+      className={cx(
+        "inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-xs hover:bg-neutral-50 active:scale-[0.99]",
+        className
+      )}
+      title="คัดลอก"
+    >
+      <FiCopy className="shrink-0" /> {children}
     </button>
   );
 }
 
-/** กล่องแสดง Tracking สวยๆ */
-function TrackingBadge({ carrier, code }) {
-  if (!carrier && !code) return null;
-  const label = TRACK_CARRIERS[carrier] || "ไม่ระบุค่าย";
+function TrackingBadge({ carrier, code, updatedAt }) {
+  if (!code) return null;
+
+  // ใช้ helper ที่ประกาศไว้ข้างบน
   const url = trackingUrl(carrier, code);
+  if (!url) return null;
+
+  const openTrack = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    window.open(url, "_blank", "noopener");
+  };
+
   return (
-    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-600 text-white">
-          🚚 {label}
+    <div className="flex flex-col items-end gap-0.5 text-xs">
+      <button
+        type="button"
+        onClick={openTrack}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border bg-amber-100 text-amber-700 hover:bg-amber-200"
+        title="กดเพื่อดูสถานะพัสดุ"
+      >
+        <FiTruck className="shrink-0" />
+        {carrier ? `${carrier} • ` : ""}เลขพัสดุ: <span className="font-semibold">{code}</span>
+      </button>
+      {updatedAt && (
+        <span className="text-neutral-400">
+          อัปเดต {new Date(updatedAt).toLocaleString("th-TH")}
         </span>
-        {code && (
-          <span className="font-mono text-sm text-gray-900">
-            เลขพัสดุ: <span className="font-semibold">{code}</span>
-          </span>
-        )}
-        {code && <Copyable text={code}>คัดลอกเลข</Copyable>}
-        {url && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm underline text-indigo-700 hover:text-indigo-900"
-          >
-            ติดตามพัสดุ
-          </a>
-        )}
+      )}
+    </div>
+  );
+}
+
+function extractShipping(o = {}) {
+  const snap =
+    o.shipping_address_snapshot ||
+    o.address_snapshot ||
+    o.shipping_info ||
+    o.user_snapshot ||
+    null;
+
+  const pick = (...arr) =>
+    arr.find((v) => v != null && String(v).trim() !== "") || null;
+
+  const name = pick(
+    o.receiver_name, o.recipient_name, o.shipping_name, o.shipping_fullname,
+    o.full_name, o.recipient, snap?.name, snap?.full_name, snap?.recipient, o.name
+  );
+
+  const phone = pick(
+    o.phone, o.receiver_phone, o.shipping_phone, o.tel, o.mobile,
+    snap?.phone, snap?.tel, snap?.mobile
+  );
+
+  const address_line = pick(o.address_line, o.address_line1, snap?.address_line, snap?.address_line1);
+  const address_line2 = pick(o.address_line2, snap?.address_line2);
+  const detail = pick(o.address_detail, o.shipping_address_detail, snap?.address_detail);
+  const subdistrict = pick(o.subdistrict, o.tambon, snap?.subdistrict, snap?.tambon);
+  const district = pick(o.district, o.amphoe, snap?.district, snap?.amphoe);
+  const province = pick(o.province, snap?.province);
+  const postal = pick(
+    o.postal_code, o.postcode, o.zip, o.zipcode,
+    snap?.postal_code, snap?.postcode, snap?.zip, snap?.zipcode
+  );
+  const strAddress = pick(
+    o.shipping_address, o.address, o.address_full,
+    o.shipping_address_text, snap?.address, snap?.address_full
+  );
+
+  const lines = [];
+  if (strAddress) {
+    lines.push(strAddress);
+  } else {
+    if (address_line) lines.push(address_line);
+    if (address_line2) lines.push(address_line2);
+    if (detail) lines.push(detail);
+    const area = [subdistrict, district, province].filter(Boolean).join(" ");
+    if (area) lines.push(area);
+    if (postal) lines.push(postal);
+  }
+
+  // ✅ ทำความสะอาดบรรทัด ป้องกันช่องว่างเกิน
+  const cleanLines = lines
+    .flatMap(v => String(v).split(/\r?\n/))
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const addressText = cleanLines.join("\n");
+
+  return { name, phone, addressText, lines };
+}
+
+/* ===== Badges ===== */
+function PaymentBadge({ method, status }) {
+  const methodTH = method === "cod" ? "ปลายทาง" : "โอน";
+  const statusTH = PAYMENT_TH[status] || PAYMENT_TH.unpaid;
+  const color = payPillColor(status || "unpaid");
+  return (
+    <span className={cx("px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1", color)}>
+      {status === "paid" ? <FiCheckCircle /> : status === "rejected" ? <FiX /> : <FiClock />}
+      {methodTH} • {statusTH}
+    </span>
+  );
+}
+
+function OrderBadge({ status }) {
+  return (
+    <span className={cx("px-2 py-0.5 text-xs rounded-full border inline-flex items-center gap-1", statusPillColor(status))}>
+      {status === "done" ? <FiCheckCircle /> : status === "cancelled" ? <FiX /> : <FiPackage />}
+      {STATUS_TH[status] || status}
+    </span>
+  );
+}
+
+function OrderStepper({ status }) {
+  if (status === "cancelled") {
+    return (<div className="flex items-center gap-2 text-rose-700 text-sm"><FiX /> คำสั่งซื้อถูกยกเลิก</div>);
+  }
+  const idx = Math.max(0, ORDER_FLOW.indexOf(status));
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-3">
+        {ORDER_FLOW_LABELS.map((label, i) => {
+          const active = i <= idx;
+          return (
+            <div key={label} className="flex items-center gap-2">
+              <div
+                className={cx(
+                  "w-6 h-6 rounded-full grid place-items-center text-xs border",
+                  active ? "bg-black text-white border-black" : "bg-white text-neutral-400 border-neutral-300"
+                )}
+              >
+                {i + 1}
+              </div>
+              <div className={cx("text-xs", active ? "text-black font-medium" : "text-neutral-400")}>{label}</div>
+              {i < ORDER_FLOW_LABELS.length - 1 && (
+                <div className={cx("w-8 h-[2px]", active ? "bg-black" : "bg-neutral-200")} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-xs text-neutral-600">
+        {`ตอนนี้อยู่ ขั้นที่ ${idx + 1} • ${ORDER_FLOW_LABELS[idx]}`}
       </div>
     </div>
   );
 }
 
-export default function MyOrders() {
+/* ===== Page ===== */
+export default function MyOrdersPage() {
   const { user } = useAuth();
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const nav = useNavigate();
 
-  // ฟิลเตอร์
-  const [latestFirst, setLatestFirst] = useState(true);
-  const [selectedStatuses, setSelectedStatuses] = useState(
-    ALL_STATUSES.filter((s) => s !== "cancelled")
-  );
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
 
-  useEffect(() => {
-    if (!user) return;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`${API_ORDERS}?userId=${user.id}`);
-        const data = await res.json();
-        setOrders(Array.isArray(data) ? data : []);
-      } catch (e) {
-        console.error("load orders error:", e);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [user]);
-
-  // —— ยกเลิกได้ทั้ง pending และ ready_to_ship —— 
-const canCancel = (status) => ["pending", "ready_to_ship"].includes(status);
+  // โหลดรายการของฉัน (ใส่ email ใน deps แก้ eslint)
+  const reloadMine = useCallback(async () => {
+    const qUser = encodeURIComponent(user?.user_id ?? "");
+    const qEmail = encodeURIComponent(user?.email ?? "");
+    const res = await fetch(`${API_BASE}/api/my-orders?userId=${qUser}&email=${qEmail}`);
+    const data = await res.json();
+    setRows(Array.isArray(data) ? data : []);
+    setLastRefreshedAt(new Date());
+  }, [user?.user_id, user?.email]);
 
   async function cancelOrder(orderId) {
-    if (!window.confirm("ยืนยันยกเลิกคำสั่งซื้อนี้หรือไม่?")) return;
+    if (!window.confirm("ต้องการยกเลิกคำสั่งซื้อนี้ใช่ไหม?")) return;
     try {
-      const res = await fetch(`http://localhost:3000/api/orders/${orderId}/cancel`, {
-        method: "PATCH",
+      const res = await fetch(`${API_BASE}/api/orders/${orderId}/cancel`, {
+        method: "PATCH", // ให้ตรง backend ของคุณ
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}), // public route ไม่ต้องส่ง restock
+        body: JSON.stringify({ buyer_id: user?.user_id }),
+        credentials: "omit", // ถ้า API ไม่ใช้คุกกี้ แนะนำ omit เพื่อเลี่ยง CORS รวม credentials
       });
-
-      // กันกรณีตอบกลับไม่ใช่ JSON
-      const ct = res.headers.get("content-type") || "";
-      const data = ct.includes("application/json")
-        ? await res.json()
-        : { message: await res.text() };
-
-      if (!res.ok) throw new Error(data?.message || "ยกเลิกไม่สำเร็จ");
-
-      setOrders((os) =>
-        os.map((o) => (o.id === orderId ? { ...o, status: data.status } : o))
-      );
-      alert("ยกเลิกออเดอร์เรียบร้อย");
+      if (!res.ok) {
+        const t = await res.text();
+        alert(t || "ยกเลิกคำสั่งซื้อไม่สำเร็จ");
+        return;
+      }
+      await reloadMine();
     } catch (e) {
-      alert(e.message);
+      console.error("cancel order error:", e);
+      alert("เกิดข้อผิดพลาดในการยกเลิก");
     }
   }
 
-  // นับจำนวนต่อสถานะ
-  const statusCounts = useMemo(() => {
-    const map = Object.fromEntries(ALL_STATUSES.map((s) => [s, 0]));
-    orders.forEach((o) => {
-      map[o.status] = (map[o.status] || 0) + 1;
-    });
-    return map;
-  }, [orders]);
+  useEffect(() => {
+    if (!user) {
+      nav("/login", { state: { from: "/my-orders" } });
+      return;
+    }
+    (async () => {
+      try { setLoading(true); setErr(""); await reloadMine(); }
+      catch { setErr("โหลดรายการคำสั่งซื้อไม่สำเร็จ"); }
+      finally { setLoading(false); }
+    })();
+  }, [user, nav, reloadMine]);
 
-  // กรอง + เรียง
-  const visibleOrders = useMemo(() => {
-    const filtered = orders.filter((o) => selectedStatuses.includes(o.status || ""));
-    const sorted = [...filtered].sort((a, b) => {
-      const ta = new Date(a.created_at || a.updated_at || 0).getTime();
-      const tb = new Date(b.created_at || b.updated_at || 0).getTime();
-      return latestFirst ? tb - ta : ta - tb;
-    });
-    return sorted;
-  }, [orders, selectedStatuses, latestFirst]);
+  const sortedAndFiltered = useMemo(() => {
+    const sorted = [...rows].sort((a, b) => new Date(b.order_date) - new Date(a.order_date));
+    if (statusFilter === "all") return sorted;
+    return sorted.filter((o) => (o.status || "").toLowerCase() === statusFilter);
+  }, [rows, statusFilter]);
 
-  const toggleStatus = (s) =>
-    setSelectedStatuses((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
-  const setOnlyStatus = (s) => setSelectedStatuses([s]);
-  const selectAll = () => setSelectedStatuses([...ALL_STATUSES]);
-  const selectNone = () => setSelectedStatuses([]);
+  const summary = useMemo(() => {
+  const norm = (v) => String(v || "").toLowerCase();
 
-  if (!user) {
-    return (
-      <div className="p-6 text-center text-gray-500">
-        กรุณา <Link to="/login" className="underline">เข้าสู่ระบบ</Link> เพื่อดูคำสั่งซื้อ
-      </div>
-    );
-  }
+  // ✅ เอาเฉพาะออเดอร์ที่จ่ายแล้ว และไม่ใช่สถานะยกเลิก
+  const paidRows = rows.filter(
+    (r) => norm(r.payment_status) === "paid" && norm(r.status) !== "cancelled"
+  );
+
+  const totalAmount = paidRows.reduce(
+    (sum, r) => sum + Number(r.total_amount || 0),
+    0
+  );
+
+  const totalOrders = rows.length; // ทั้งหมด (ถ้าจะนับเฉพาะที่จ่ายแล้วก็ใช้ paidRows.length)
+  const byStatus = rows.reduce((acc, r) => {
+    const k = norm(r.status || "unknown");
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+
+  return {
+    totalOrders,
+    totalAmount,            // 💰 ยอดใช้จ่ายรวมเฉพาะที่ "paid"
+    paidCount: paidRows.length, // (ตัวเลือก) จำนวนออเดอร์ที่จ่ายแล้ว
+    byStatus,
+  };
+}, [rows]);
+
+  const counts = useMemo(() => ({
+    all: rows.length,
+    pending: summary.byStatus.pending || 0,
+    ready_to_ship: summary.byStatus.ready_to_ship || 0,
+    shipped: summary.byStatus.shipped || 0,
+    done: summary.byStatus.done || 0,
+    cancelled: summary.byStatus.cancelled || 0,
+  }), [rows, summary]);
+
+  const empty = !loading && sortedAndFiltered.length === 0;
+
+  const FILTERS = [
+    { key: "all", label: "ทั้งหมด" },
+    { key: "pending", label: STATUS_TH.pending },
+    { key: "ready_to_ship", label: STATUS_TH.ready_to_ship },
+    { key: "shipped", label: STATUS_TH.shipped },
+    { key: "done", label: STATUS_TH.done },
+    { key: "cancelled", label: STATUS_TH.cancelled },
+  ];
+
+  const activeFilter = FILTERS.find(f => f.key === statusFilter) || FILTERS[0];
+  const activeCount = counts[statusFilter] ?? 0;
 
   return (
-    <div className="max-w-5xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-4 text-gray-900">คำสั่งซื้อของฉัน</h1>
-
-      {/* ฟิลเตอร์ */}
-      <div className="mb-6 space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              className="accent-indigo-600"
-              checked={latestFirst}
-              onChange={(e) => setLatestFirst(e.target.checked)}
-            />
-            เรียง “ล่าสุด” ก่อน
-          </label>
-
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={selectAll}
-              className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-900 text-white hover:bg-black transition"
-            >
-              เลือกทั้งหมด
-            </button>
-            <button
-              onClick={selectNone}
-              className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300 transition"
-            >
-              เอาออกทั้งหมด
-            </button>
+    <div className="max-w-5xl mx-auto px-4 md:px-6 py-8 space-y-5">
+      {/* Header */}
+      <div className="rounded-2xl overflow-hidden border">
+        <div className="bg-gradient-to-r from-black via-neutral-800 to-neutral-700 text-white px-6 py-5 flex items-center justify-between">
+          <div>
+            <div className="text-sm text-white/70 mb-1">
+              <Link to="/" className="hover:underline">หน้าแรก</Link> <span className="mx-1">/</span> คำสั่งซื้อของฉัน
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">🧾 คำสั่งซื้อของฉัน</h1>
           </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="inline-flex items-center gap-2 px-3 h-10 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 transition"
+            title="รีเฟรช"
+          >
+            <FiRefreshCw />
+            รีเฟรช
+          </button>
         </div>
 
-        <div className="flex flex-wrap gap-8">
-          {ALL_STATUSES.map((s) => {
-            const active = selectedStatuses.includes(s);
-            return (
-              <button
-                key={s}
-                onClick={() => toggleStatus(s)}
-                onDoubleClick={() => setOnlyStatus(s)}
-                className={[
-                  "px-4 py-2 rounded-full text-sm font-medium border shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2",
-                  active
-                    ? STATUS_CONFIG[s].activeClass + " focus:ring-black"
-                    : "bg-white text-gray-800 border-gray-300 hover:bg-gray-100 focus:ring-gray-300",
-                ].join(" ")}
-                title={`ดับเบิลคลิกเพื่อเลือกเฉพาะ: ${STATUS_CONFIG[s].label}`}
-              >
-                {STATUS_CONFIG[s].label}{" "}
-                <span className="opacity-70">({statusCounts[s] || 0})</span>
-              </button>
-            );
-          })}
+        {/* Summary */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-6 bg-white">
+          <SummaryCard title="จำนวนคำสั่งซื้อ" value={summary.totalOrders} />
+          <SummaryCard title="ยอดใช้จ่ายรวม" value={<span className="text-emerald-600">{formatTHB(summary.totalAmount)}</span>} />
+          <div className="rounded-xl border p-4">
+            <div className="text-sm text-neutral-500">สถานะล่าสุด</div>
+            <div className="flex flex-wrap gap-2 mt-2 text-xs">
+              {Object.entries(summary.byStatus).map(([k, v]) => (
+                <span key={k} className="px-2 py-0.5 rounded-full bg-neutral-50 border">
+                  {(STATUS_TH[k] || k)}: <b>{v}</b>
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* รายการออเดอร์ */}
-      {loading ? (
-        // Skeleton
-        <div className="space-y-4">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="rounded-2xl border border-gray-200 p-5 bg-white">
-              <div className="animate-pulse space-y-3">
-                <div className="h-4 w-56 bg-gray-200 rounded" />
-                <div className="h-3 w-40 bg-gray-200 rounded" />
-                <div className="h-20 w-full bg-gray-100 rounded" />
-              </div>
-            </div>
-          ))}
+      {/* Viewing bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-white border rounded-xl px-4 py-3">
+        <div className="text-sm">กำลังดู: <b>{activeFilter.label}</b> {`(${activeCount})`}</div>
+        <div className="text-xs text-neutral-500">
+          {lastRefreshedAt ? `อัปเดตล่าสุด: ${lastRefreshedAt.toLocaleString("th-TH")}` : "—"}
         </div>
-      ) : visibleOrders.length === 0 ? (
-        // Empty state
-        <div className="text-center text-gray-600 bg-gray-50 border border-dashed border-gray-300 rounded-2xl p-10">
-          <div className="text-4xl mb-2">🧺</div>
-          ยังไม่มีออเดอร์ตามตัวกรองที่เลือก
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {visibleOrders.map((o) => (
-            <div
-              key={o.id}
-              className={[
-                "rounded-2xl border shadow-sm p-5 bg-white/90 backdrop-blur",
-                "hover:shadow-md hover:-translate-y-[1px] transition",
-                o.status === "cancelled" ? "opacity-60" : "",
-              ].join(" ")}
+      </div>
+
+      {/* Filters */}
+      <div className="w-full overflow-x-auto">
+        <div className="inline-flex rounded-full border bg-white p-1 shadow-sm sticky top-2">
+          {FILTERS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setStatusFilter(key)}
+              className={cx(
+                "px-4 h-10 rounded-full text-sm transition relative",
+                statusFilter === key ? "bg-black text-white shadow" : "hover:bg-neutral-50"
+              )}
             >
-              {/* Header */}
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div className="space-y-1">
-                  <div className="font-semibold text-gray-900">ออเดอร์ {o.order_code}</div>
-                  <div className="text-sm text-gray-600">
-                    วันที่: {o.created_at ? new Date(o.created_at).toLocaleString("th-TH") : "-"}
-                  </div>
-
-                  {(o.payment_method || o.payment_status) && (
-                    <div className="text-sm text-gray-700 mt-1">
-                      วิธีชำระเงิน:{" "}
-                      <span className="font-medium">
-                        {PAYMENT_METHOD_TH[o.payment_method] || o.payment_method || "-"}
-                      </span>
-                      {o.payment_status && (
-                        <span className="ml-3">
-                          สถานะชำระเงิน:{" "}
-                          <span className="font-medium">{PAY_LABELS[o.payment_status] || "-"}</span>
-                        </span>
-                      )}
-                      {o.slip_image && (
-                        <a
-                          href={`http://localhost:3000${o.slip_image}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="ml-3 underline text-gray-900"
-                        >
-                          ดูสลิป
-                        </a>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Tracking */}
-                  {(o.tracking_code || o.tracking_carrier) && (
-                    <TrackingBadge carrier={o.tracking_carrier} code={o.tracking_code} />
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                      STATUS_CONFIG[o.status]?.badgeClass || "bg-gray-200 text-gray-800"
-                    }`}
-                  >
-                    {STATUS_CONFIG[o.status]?.label ?? o.status ?? "-"}
-                  </span>
-
-                  {canCancel(o.status) && (
-                    <button
-                      onClick={() => cancelOrder(o.id)}
-                      className="px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-black text-white text-sm transition"
-                    >
-                      ยกเลิกคำสั่งซื้อ
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Items */}
-              <div className="divide-y divide-gray-200">
-                {o.items?.map((it) => (
-                  <div key={it.id} className="flex items-center gap-4 py-3">
-                    {it.image && (
-                      <img
-                        src={`http://localhost:3000${it.image}`}
-                        alt={it.name}
-                        className="w-16 h-16 object-cover rounded-lg border border-gray-200"
-                      />
-                    )}
-                    <div className="flex-1">
-                      <div className="text-gray-900">{it.name}</div>
-                      {it.size && <div className="text-sm text-gray-600">ไซซ์: {it.size}</div>}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      {it.quantity} × {CURRENCY(it.unit_price ?? it.price_per_unit)}
-                    </div>
-                    <div className="font-semibold text-gray-900">{CURRENCY(it.line_total)}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Summary */}
-              <div className="flex justify-end mt-4">
-                <div className="text-right">
-                  <div className="text-gray-600 text-sm">ยอดรวม</div>
-                  <div className="text-lg font-bold text-gray-900">{CURRENCY(o.total_price)}</div>
-                </div>
-              </div>
-            </div>
+              <span>{label}</span>
+              <span
+                className={cx(
+                  "ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-6 px-2 rounded-full text-xs border",
+                  statusFilter === key ? "bg-white/10 border-white/20" : "bg-neutral-100 border-neutral-200 text-neutral-700"
+                )}
+              >
+                {counts[key] ?? 0}
+              </span>
+            </button>
           ))}
+        </div>
+      </div>
+
+      {/* States */}
+      {loading && (
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => <SkeletonCard key={i} />)}
         </div>
       )}
+      {err && (
+        <div className="flex items-center gap-2 text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">
+          <FiAlertCircle className="shrink-0" />
+          <span className="text-sm">{err}</span>
+        </div>
+      )}
+
+      {!loading && !err && (
+        empty ? (
+          <EmptyState />
+        ) : (
+          <div className="space-y-3">
+            {sortedAndFiltered.map((o) => {
+              const ship = extractShipping(o);
+              return (
+                <Link
+                  key={o.order_id}
+                  to={`/orders/${o.order_id}`}
+                  className="block bg-white border rounded-2xl p-4 hover:shadow-md transition"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-semibold truncate">คำสั่งซื้อ #{o.order_id}</div>
+                        <OrderBadge status={o.status} />
+                        <PaymentBadge method={o.payment_method} status={o.payment_status} />
+                      </div>
+
+                      <div className="text-xs text-neutral-500 mt-0.5">
+                        {new Date(o.order_date).toLocaleString("th-TH")} • {o.total_items} ชิ้น
+                      </div>
+
+                      {/* ผู้รับ & ที่อยู่จัดส่ง (ครบทุกบรรทัด, ไม่ truncate) */}
+                      <div className="mt-3 rounded-xl border border-dashed bg-neutral-50/60 p-3">
+                        <div className="grid gap-3 md:grid-cols-3 md:items-start">
+                          {/* ชื่อ */}
+                          <div className="flex items-start gap-2 min-w-0">
+                            <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
+                              <FiUser className="text-neutral-600" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs text-neutral-500">ผู้รับ</div>
+                              <StopBubble>
+                                <div className="text-sm font-medium text-neutral-900 break-words whitespace-pre-wrap">
+                                  {ship.name || "—"}
+                                </div>
+                              </StopBubble>
+                            </div>
+                            {ship.name && <Copyable text={ship.name} className="ml-2">คัดลอกชื่อ</Copyable>}
+                          </div>
+
+                          {/* เบอร์ */}
+                          <div className="flex items-start gap-2 min-w-0">
+                            <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
+                              <FiPhone className="text-neutral-600" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs text-neutral-500">เบอร์</div>
+                              <StopBubble>
+                                <div className="text-sm font-medium text-neutral-900 break-words whitespace-pre-wrap">
+                                  {ship.phone || "—"}
+                                </div>
+                              </StopBubble>
+                            </div>
+                            {ship.phone && <Copyable text={ship.phone} className="ml-2">คัดลอกเบอร์</Copyable>}
+                          </div>
+
+                          {/* ที่อยู่ (ทุกบรรทัด) */}
+                          <div className="flex items-start gap-2 md:col-span-1 min-w-0">
+                            <div className="w-7 h-7 mt-0.5 rounded-full bg-white border grid place-items-center">
+                              <FiMapPin className="text-neutral-600" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs text-neutral-500">ที่อยู่จัดส่ง</div>
+                              <StopBubble>
+                                <div className="text-sm font-medium text-neutral-900 break-words whitespace-pre-line">
+                                  {ship.addressText || "—"}
+                                </div>
+                              </StopBubble>
+                            </div>
+                            {ship.addressText && <Copyable text={ship.addressText} className="ml-2">คัดลอกที่อยู่</Copyable>}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3">
+                        <OrderStepper status={o.status} />
+                      </div>
+
+                      {/* รูปสินค้า + รายชื่อ */}
+                      {Array.isArray(o.items) && o.items.length > 0 && (
+                        <>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {o.items.map((it) => (
+                              <img
+                                key={it.order_detail_id}
+                                src={it.item_image || FALLBACK_IMG}
+                                alt={it.item_name || it.item_type}
+                                className="w-12 h-12 rounded-md object-cover border"
+                                onError={(e) => { e.currentTarget.src = FALLBACK_IMG; }}
+                                title={it.item_name || it.item_type}
+                                onClick={(e)=>e.stopPropagation()}
+                              />
+                            ))}
+                          </div>
+                          <ul className="mt-3 space-y-1">
+                            {o.items.map((it, idx) => (
+                              <li
+                                key={it.order_detail_id || `name-${idx}`}
+                                className="flex items-center gap-2 text-base font-semibold text-gray-900"
+                              >
+                                <span className="truncate">{it.item_name || it.item_type || "สินค้า"}</span>
+                                <span className="text-sm text-gray-500">× {Number(it.quantity || 1)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col items-end gap-2 shrink-0">
+                      <TrackingBadge
+                        carrier={o.carrier}
+                        code={o.tracking_code}
+                        updatedAt={o.tracking_updated_at}
+                      />
+
+                      {(["pending", "ready_to_ship"].includes(o.status) && !o.carrier && !o.tracking_code) && (
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelOrder(o.order_id); }}
+                          className="inline-flex items-center gap-2 px-3 h-9 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-sm"
+                          title="ยกเลิกคำสั่งซื้อนี้"
+                        >
+                          <FiX /> ยกเลิกคำสั่งซื้อ
+                        </button>
+                      )}
+
+                      <div className="font-bold text-emerald-600 whitespace-nowrap">
+                        {formatTHB(o.total_amount)}
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+/* ===== Subcomponents ===== */
+function SummaryCard({ title, value }) {
+  return (
+    <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow-md transition">
+      <div className="text-sm text-neutral-500">{title}</div>
+      <div className="text-2xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="border rounded-2xl p-4 bg-white shadow-sm animate-pulse">
+      <div className="flex gap-3">
+        <div className="w-12 h-12 rounded-md bg-neutral-200" />
+        <div className="flex-1">
+          <div className="h-4 w-1/3 bg-neutral-200 rounded mb-2" />
+          <div className="h-3 w-2/3 bg-neutral-200 rounded mb-1.5" />
+          <div className="h-3 w-1/2 bg-neutral-200 rounded mb-3" />
+          <div className="h-8 w-full bg-neutral-100 rounded" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="p-10 text-center border rounded-2xl bg-white">
+      <div className="text-5xl mb-3">🛒</div>
+      <h3 className="text-lg font-semibold">ไม่พบคำสั่งซื้อในสถานะนี้</h3>
+      <p className="text-neutral-600 text-sm mt-1">เริ่มเลือกสินค้าถูกใจ แล้วย้อนกลับมาดูที่นี่ได้เลย</p>
+      <Link to="/" className="inline-block mt-3 px-4 py-2 rounded-xl border hover:bg-neutral-50">
+        เริ่มช้อปเลย
+      </Link>
     </div>
   );
 }

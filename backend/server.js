@@ -14,9 +14,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ====== Config ======
-const uploadDir = path.join(__dirname, 'uploads');
+const uploadDir = "C:/Users/ADMIN/Desktop/อัพโหลดเสือผ้า/uploads";  // ✅ path เต็ม (Windows ใช้ / ได้)
 if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
+  fs.mkdirSync(uploadDir, { recursive: true });
 }
 
 // ====== Slip Upload (ไปที่ uploads/slips) ======
@@ -24,10 +24,11 @@ const slipDir = path.join(uploadDir, 'slips');
 if (!fs.existsSync(slipDir)) fs.mkdirSync(slipDir, { recursive: true });
 
 const slipStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, slipDir),
-  filename: (req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
+  destination: (_req, _file, cb) => cb(null, slipDir),
+  filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
 });
 const slipUpload = multer({ storage: slipStorage });
+
 // ====== Profile Upload (ไปที่ uploads/profile) ======
 const profileDir = path.join(uploadDir, 'profile');
 if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
@@ -310,15 +311,16 @@ app.post('/api/login', async (req, res) => {
       return res.status(403).json({ message: 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ' });
     }
 
-    // === รองรับทั้ง hash และ plain (เช่น admin ที่เก็บ "12") ===
+    // === รองรับทั้ง hash และ plain ===
     let ok = false;
     const pass = String(user.password || '');
+    const isHash =
+      pass.startsWith('$2a$') || pass.startsWith('$2b$') || pass.startsWith('$2y$');
 
-    const isHash = pass.startsWith('$2a$') || pass.startsWith('$2b$') || pass.startsWith('$2y$');
     if (isHash) {
       ok = await bcrypt.compare(password, pass);
     } else {
-      ok = (password === pass);
+      ok = password === pass;
     }
 
     if (!ok) {
@@ -337,18 +339,23 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ message: 'เกิดข้อผิดพลาดในระบบ' });
   }
 });
+
 app.get('/api/last-logged-in-user', (req, res) => {
   if (!lastLoggedInUser) return res.json({ message: 'ไม่มีผู้ใช้ล็อกอินล่าสุด' });
   res.json({ lastLoggedInUser });
 });
 
-// ==================== โปรไฟล์ ====================
 app.get('/api/profile', async (req, res) => {
   const email = req.query.email;
   if (!email) return res.status(400).json({ message: 'กรุณาส่ง email มา' });
 
   try {
-    const query = 'SELECT email, username, address, phone, profile_image FROM users WHERE email = $1';
+    const query = `
+      SELECT email, username, address, phone, profile_image,
+             province, district, subdistrict, zipcode
+      FROM users
+      WHERE email = $1
+    `;
     const result = await pool.query(query, [email]);
     if (result.rows.length === 0) return res.status(404).json({ message: 'ไม่พบข้อมูลผู้ใช้' });
 
@@ -360,7 +367,8 @@ app.get('/api/profile', async (req, res) => {
 });
 
 app.put('/api/profile', async (req, res) => {
-  const { email, username, address, phone, profile_image, password } = req.body;
+  const { email, username, address, phone, profile_image, password,
+          province, district, subdistrict, zipcode } = req.body;
   if (!email) return res.status(400).json({ message: 'กรุณาส่ง email มา' });
 
   try {
@@ -370,25 +378,31 @@ app.put('/api/profile', async (req, res) => {
       return res.status(400).json({ message: 'ชื่อนี้ถูกใช้ไปแล้ว กรุณาใช้ชื่ออื่น' });
     }
 
-    let updateQuery;
-    let params;
+    let updateQuery, params;
 
     if (password) {
-      // ถ้าจะอัปเดตรหัสผ่าน ให้แฮชใหม่
       const hashed = await bcrypt.hash(password, 10);
       updateQuery = `
         UPDATE users SET
-          username=$1, address=$2, phone=$3, profile_image=$4, password=$5
-        WHERE email=$6 RETURNING email, username, address, phone, profile_image
+          username=$1, address=$2, phone=$3, profile_image=$4, password=$5,
+          province=$6, district=$7, subdistrict=$8, zipcode=$9
+        WHERE email=$10
+        RETURNING email, username, address, phone, profile_image,
+                  province, district, subdistrict, zipcode
       `;
-      params = [username, address, phone, profile_image, hashed, email];
+      params = [username, address, phone, profile_image, hashed,
+                province, district, subdistrict, zipcode, email];
     } else {
       updateQuery = `
         UPDATE users SET
-          username=$1, address=$2, phone=$3, profile_image=$4
-        WHERE email=$5 RETURNING email, username, address, phone, profile_image
+          username=$1, address=$2, phone=$3, profile_image=$4,
+          province=$5, district=$6, subdistrict=$7, zipcode=$8
+        WHERE email=$9
+        RETURNING email, username, address, phone, profile_image,
+                  province, district, subdistrict, zipcode
       `;
-      params = [username, address, phone, profile_image, email];
+      params = [username, address, phone, profile_image,
+                province, district, subdistrict, zipcode, email];
     }
 
     const result = await pool.query(updateQuery, params);
@@ -400,6 +414,7 @@ app.put('/api/profile', async (req, res) => {
     res.status(500).json({ message: 'เกิดข้อผิดพลาดในการบันทึกข้อมูลโปรไฟล์' });
   }
 });
+
 // ===== helpers: measure variants (อก/ยาว) =====
 function parseMeasureVariants(input) {
   let mv = input;
@@ -858,8 +873,10 @@ function _normalizeMV(mvRaw) {
   if (typeof mv === 'string') { try { mv = JSON.parse(mv); } catch { mv = []; } }
   if (!Array.isArray(mv)) return [];
   return mv.map(v => ({
-    chest_in:  Number(v?.chest_in ?? v?.chest ?? v?.chest_cm),
-    length_in: Number(v?.length_in ?? v?.length ?? v?.length_cm),
+    // ✅ เก็บ size ไว้ด้วยเพื่อให้เทียบได้
+    size:      v?.size ?? null,
+    chest_in:  _toNum(v?.chest_in ?? v?.chest ?? v?.chest_cm),
+    length_in: _toNum(v?.length_in ?? v?.length ?? v?.length_cm),
     stock:     Number(v?.stock ?? 0),
   }));
 }
@@ -886,11 +903,15 @@ async function _restockItems(client, items) {
     const prod = pQ.rows[0];
     let mv = _normalizeMV(prod.measure_variants);
 
+    // หา index ที่ต้องคืนสต๊อก
     let idx = -1;
+
+    // 1) เทียบตาม size ตรง ๆ ก่อน
     if (it.size) {
       const s = String(it.size).trim().toLowerCase();
       idx = mv.findIndex(v => String(v.size || '').toLowerCase() === s);
     }
+    // 2) ถ้าไม่เจอ ให้เทียบตามอก/ยาว (นิ้ว)
     if (idx < 0 && it.chest != null && it.length != null) {
       idx = mv.findIndex(v =>
         _toNum(v.chest_in) === _toNum(it.chest) &&
@@ -901,6 +922,7 @@ async function _restockItems(client, items) {
     if (idx >= 0) {
       mv[idx].stock = Number(mv[idx].stock || 0) + qty;
     } else {
+      // ไม่เจอช่อง → สร้างช่องใหม่ตามข้อมูลที่มี
       mv.push({
         size: it.size || null,
         chest_in: _toNum(it.chest),
@@ -930,7 +952,9 @@ async function _loadOrderItemsForCancel(client, orderId) {
     [orderId]
   );
   return itQ.rows.map(r => {
-    const m = r.measures || {};
+    let m = r.measures;
+    if (typeof m === 'string') { try { m = JSON.parse(m); } catch { m = {}; } }
+    m = m || {};
     const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
     return {
       product_id: r.product_id,
@@ -942,7 +966,61 @@ async function _loadOrderItemsForCancel(client, orderId) {
   });
 }
 
-/* ===================== ROUTE: ผู้ใช้ยกเลิก ===================== */
+/* ===================== ผู้ใช้ยกเลิก (คืนสต๊อกเสมอ) ===================== */
+// ✅ รองรับทั้ง PATCH และ PUT (ให้ FE ไม่ต้องแก้ก็ได้)
+async function _cancelOrderHandler(req, res) {
+  const client = await pool.connect();
+  try {
+    const orderId = Number(req.params.id);
+    if (!Number.isFinite(orderId)) return res.status(400).json({ message: 'invalid order id' });
+
+    await client.query('BEGIN');
+
+    const oQ = await client.query(
+      `SELECT id, status, cancelled_restocked_at
+         FROM orders
+        WHERE id=$1
+        FOR UPDATE`,
+      [orderId]
+    );
+    if (!oQ.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'ไม่พบออเดอร์' }); }
+    const order = oQ.rows[0];
+
+    if (!['pending','ready_to_ship'].includes(order.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
+    }
+
+    // 👉 ชื่อฟังก์ชันที่ถูกต้อง
+    const items = await _loadOrderItemsForCancel(client, orderId);
+
+    await _restockItems(client, items);
+
+    const upd = await client.query(
+      `UPDATE orders
+          SET status='cancelled',
+              cancelled_restocked_at = COALESCE(cancelled_restocked_at, NOW()),
+              updated_at = NOW()
+        WHERE id=$1
+        RETURNING id, status, cancelled_restocked_at`,
+      [orderId]
+    );
+
+    await client.query('COMMIT');
+    return res.json({
+      success: true,
+      status: upd.rows[0].status,
+      cancelled_restocked_at: upd.rows[0].cancelled_restocked_at
+    });
+  } catch (err) {
+    console.error('CANCEL order error:', err);
+    try { await client.query('ROLLBACK'); } catch {}
+    return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการยกเลิกออเดอร์' });
+  } finally {
+    client.release();
+  }
+}
+/* ===================== ผู้ใช้ยกเลิก (คืนสต๊อกเสมอ) ===================== */
 app.patch('/api/orders/:id/cancel', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -966,9 +1044,12 @@ app.patch('/api/orders/:id/cancel', async (req, res) => {
       return res.status(400).json({ message: 'สถานะนี้ยกเลิกไม่ได้' });
     }
 
-    const items = await _loadOrderItemsForCancel(client, orderId);
-    await _restockItems(client, items);
+    // ✅ โหลดรายการสินค้าในออเดอร์
+    const items = await _loadOrderItems(client, orderId); 
+    // ✅ คืนสต็อกสินค้าโดยใช้ await เพื่อให้แน่ใจว่าทำงานเสร็จก่อน
+    await _restockItems(client, items); 
 
+    // ✅ อัปเดตสถานะเป็น 'cancelled'
     const upd = await client.query(
       `UPDATE orders
           SET status='cancelled',
@@ -1158,38 +1239,44 @@ app.post('/api/orders', async (req, res) => {
       const total = subtotal + shipping;
       const paymentStatus = (paymentMethod === 'cod') ? 'unpaid' : 'submitted';
 
-      // บันทึก orders
-      const orderCode = genOrderCode();
-      const ordRes = await client.query(
-        `INSERT INTO orders
-           (order_code, user_id, email, full_name, phone, address_line, district, province, postcode,
-            shipping_method, payment_method, payment_status,
-            subtotal, shipping, total_price, total_qty, note, status, created_at)
-         VALUES
-           ($1,$2,$3,$4,$5,$6,$7,$8,$9,
-            $10,$11,$12,
-            $13,$14,$15,$16,$17,'pending', NOW())
-         RETURNING id, order_code`,
-        [
-          orderCode,
-          userId ?? null,
-          email ?? null,
-          address.fullName ?? null,
-          address.phone ?? null,
-          address.addressLine ?? null,
-          address.district ?? null,
-          address.province ?? null,
-          address.postcode ?? null,
-          shippingMethod,
-          paymentMethod,
-          paymentStatus,
-          subtotal,
-          shipping,
-          total,
-          totalQty,
-          note || ''
-        ]
-      );
+     // บันทึก orders
+const orderCode = genOrderCode();
+const ordRes = await client.query(
+  `INSERT INTO orders
+     (order_code, user_id, email, full_name, phone, address_line,
+      district, province, postcode, subdistrict,
+      shipping_method, payment_method, payment_status,
+      subtotal, shipping, total_price, total_qty, note, status, created_at)
+   VALUES
+     ($1,$2,$3,$4,$5,$6,
+      $7,$8,$9,$10,
+      $11,$12,$13,
+      $14,$15,$16,$17,$18,'pending', NOW())
+   RETURNING id, order_code`,
+  [
+    orderCode,
+    userId ?? null,
+    email ?? null,
+    address.fullName ?? null,
+    address.phone ?? null,
+    address.addressLine ?? null,
+    address.district ?? null,
+    address.province ?? null,
+    address.postcode ?? null,
+    address.subdistrict ?? null,       // << ใส่ค่าตำบลตรงนี้
+
+    shippingMethod,
+    paymentMethod,
+    paymentStatus,
+
+    subtotal,
+    shipping,
+    total,
+    totalQty,
+    note || ''
+  ]
+);
+
       const orderId = ordRes.rows[0].id;
 
       // บันทึก order_items (ใส่ orderId ตรงนี้)
@@ -1293,7 +1380,7 @@ app.get("/api/admin/orders/:id", async (req, res) => {
     const { id } = req.params;
     const ordQ = `
       SELECT id, order_code, user_id, email,
-             full_name, phone, address_line, district, province, postcode,
+             full_name, phone, address_line, district,subdistrict, province, postcode,
              shipping_method, payment_method,
              subtotal, shipping, total_price, total_qty, note,
              status, created_at,
@@ -1517,37 +1604,78 @@ app.patch("/api/admin/orders/:id/tracking", async (req, res) => {
   }
 });
 
-// =================== 9) ดึงออเดอร์ของ user (รวม items + tracking) ===================
+// =================== 9) ดึงออเดอร์ของ user (รวม items + tracking + address) ===================
 app.get('/api/my-orders', async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ message: 'missing userId' });
+  const userId = req.query.userId || req.query.buyer_id || null;
+  const email  = req.query.email  || null;
+  if (!userId && !email) return res.status(400).json({ message: 'missing userId or email' });
 
   try {
     const o = await pool.query(
-      `SELECT id, order_code, created_at, status, total_price,
-              payment_method, payment_status, slip_image, payment_amount,
-              tracking_carrier, tracking_code
-       FROM orders
-       WHERE user_id = $1
-       ORDER BY created_at DESC`,
-      [userId]
+      `
+      SELECT
+        o.id                 AS order_id,
+        o.order_code         AS order_code,
+        o.created_at         AS order_date,
+        o.status             AS status,
+        o.total_price        AS total_amount,
+        o.payment_method     AS payment_method,
+        o.payment_status     AS payment_status,
+        o.slip_image         AS slip_image,
+        o.payment_amount     AS payment_amount,
+        o.tracking_carrier   AS carrier,
+        o.tracking_code      AS tracking_code,
+
+        /* ===== ผู้รับ & ที่อยู่จากตาราง orders ===== */
+        o.full_name          AS receiver_name,
+        o.phone              AS receiver_phone,
+        o.address_line       AS address_line,
+        o.subdistrict        AS subdistrict,
+        o.district           AS district,
+        o.province           AS province,
+        o.postcode           AS postcode,
+
+        /* จำนวนชิ้นในออเดอร์ */
+        COALESCE((
+          SELECT SUM(oi.quantity)::int
+          FROM order_items oi
+          WHERE oi.order_id = o.id
+        ), 0)                AS total_items
+      FROM orders o
+      WHERE ($1::int IS NOT NULL AND o.user_id = $1)
+         OR ($1::int IS NULL AND $2::text IS NOT NULL AND o.email = $2)
+      ORDER BY o.created_at DESC
+      `,
+      [userId ? Number(userId) : null, email]
     );
 
-    const orderIds = o.rows.map(r => r.id);
+    const orderIds = o.rows.map(r => r.order_id);
     if (orderIds.length === 0) return res.json([]);
 
     const it = await pool.query(
-      `SELECT id, order_id, product_id, name, size,
-              unit_price, price_per_unit, quantity, line_total, image
-       FROM order_items
-       WHERE order_id = ANY($1)`,
+      `
+      SELECT
+        id             AS order_detail_id,
+        order_id       AS order_id,
+        product_id     AS product_id,
+        name           AS item_name,
+        image          AS item_image,
+        size           AS size,
+        unit_price     AS unit_price,
+        price_per_unit AS price_per_unit,
+        quantity       AS quantity,
+        line_total     AS line_total
+      FROM order_items
+      WHERE order_id = ANY($1)
+      ORDER BY id ASC
+      `,
       [orderIds]
     );
 
     const map = new Map(orderIds.map(id => [id, []]));
-    for (const row of it.rows) map.get(row.order_id).push(row);
+    for (const row of it.rows) map.get(row.order_id)?.push(row);
 
-    const out = o.rows.map(ord => ({ ...ord, items: map.get(ord.id) || [] }));
+    const out = o.rows.map(ord => ({ ...ord, items: map.get(ord.order_id) || [] }));
     res.json(out);
   } catch (e) {
     console.error('GET /api/my-orders error', e);

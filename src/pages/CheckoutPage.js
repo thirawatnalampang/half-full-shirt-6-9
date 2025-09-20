@@ -13,6 +13,21 @@ const SHIPPING_THRESHOLD = 1000;
 const SHIPPING_FEE_STANDARD = 50;
 const SHIPPING_FEE_EXPRESS = 80;
 
+// ---- helper: แยก ต./อ./จ./zipcode ออกจาก address สตริงรวม (ถ้ามี) ----
+function parseThaiAddressParts(addr = '') {
+  const mSub = addr.match(/ต\.([^\sอจ\d]+)\s*/);
+  const mDis = addr.match(/อ\.([^\sจ\d]+)\s*/);
+  const mPro = addr.match(/จ\.([^\d]+?)(\s*\d{5})?$/);
+  const mZip = addr.match(/(\d{5})\s*$/);
+  return {
+    subdistrict: mSub?.[1]?.trim() || '',
+    district: mDis?.[1]?.trim() || '',
+    province: mPro?.[1]?.trim() || '',
+    postcode: mZip?.[1] || '',
+    cleanAddress: addr.replace(/\s*ต\.[^อจ0-9\s]+\s*อ\.[^จ0-9\s]+\s*จ\.[^\d]+(\s*\d{5})?\s*$/,'').trim(),
+  };
+}
+
 export default function CheckoutPage() {
   const navigate = useNavigate();
   const { cart, clearCart } = useCart();
@@ -22,12 +37,14 @@ export default function CheckoutPage() {
   const [form, setForm] = useState({
     fullName: '',
     phone: '',
-    addressLine: '',
-    district: '',
+    addressLine: '',  // บ้านเลขที่/หมู่/ถนน
     province: '',
+    district: '',
+    subdistrict: '',
     postcode: '',
     note: '',
   });
+
   const [shippingMethod, setShippingMethod] = useState('standard'); // standard | express
   const [paymentMethod, setPaymentMethod] = useState('cod');        // cod | transfer
   const [submitting, setSubmitting] = useState(false);
@@ -42,6 +59,44 @@ export default function CheckoutPage() {
   const [slipFile, setSlipFile] = useState(null);
   const [slipAmount, setSlipAmount] = useState('');
 
+  // ===== โหลดไทยแอดเดรส + options + postcode อัตโนมัติ =====
+  const [addrData, setAddrData] = useState([]);
+  useEffect(() => {
+    fetch('/thai-address.json')
+      .then(r => r.json())
+      .then(setAddrData)
+      .catch(e => console.error('load thai-address.json error:', e));
+  }, []);
+
+  const provinceOptions = useMemo(() => addrData.map(p => p.province), [addrData]);
+
+  const districtOptions = useMemo(() => {
+    if (!form.province) return [];
+    const p = addrData.find(x => x.province === form.province);
+    return p?.amphoes?.map(a => a.amphoe) || [];
+  }, [addrData, form.province]);
+
+  const subdistrictOptions = useMemo(() => {
+    if (!form.province || !form.district) return [];
+    const p = addrData.find(x => x.province === form.province);
+    const d = p?.amphoes?.find(a => a.amphoe === form.district);
+    return d?.tambons?.map(t => t.tambon) || [];
+  }, [addrData, form.province, form.district]);
+
+  // postcode อัตโนมัติจากตัวเลือก
+  useEffect(() => {
+    if (!form.province || !form.district || !form.subdistrict) {
+      setForm(f => ({ ...f, postcode: '' }));
+      return;
+    }
+    const p = addrData.find(x => x.province === form.province);
+    const d = p?.amphoes?.find(a => a.amphoe === form.district);
+    const t = d?.tambons?.find(tt => tt.tambon === form.subdistrict);
+    const zip = t?.zipcode || '';
+    setForm(f => ({ ...f, postcode: zip }));
+  }, [addrData, form.province, form.district, form.subdistrict]);
+
+  // ดึงโปรไฟล์มาเติมให้
   useEffect(() => {
     async function loadProfile() {
       if (!user?.email) return;
@@ -51,14 +106,40 @@ export default function CheckoutPage() {
         if (!res.ok) throw new Error('โหลดโปรไฟล์ไม่สำเร็จ');
         const data = await res.json();
         setProfile(data);
-        setForm((f) => ({
+
+        // เตรียมค่าเริ่มต้น
+        let province = data?.province || '';
+        let district = data?.district || '';
+        let subdistrict = data?.subdistrict || '';
+        let postcode = data?.zipcode || data?.postcode || '';
+        let addressLine = data?.address || '';
+
+        // ถ้าโปรไฟล์ยังไม่ได้แยกช่อง แต่ address เป็นสตริงรวม ให้แยก
+        if ((!province || !district || !subdistrict) && addressLine && /ต\..+อ\..+จ\./.test(addressLine)) {
+          const parsed = parseThaiAddressParts(addressLine);
+          province = province || parsed.province;
+          district = district || parsed.district;
+          subdistrict = subdistrict || parsed.subdistrict;
+          postcode = postcode || parsed.postcode;
+          addressLine = parsed.cleanAddress || addressLine;
+        }
+
+        setForm(f => ({
           ...f,
           fullName: data?.username || f.fullName || '',
           phone: data?.phone || f.phone || '',
-          addressLine: data?.address || f.addressLine || '',
+          addressLine: addressLine || f.addressLine || '',
+          province: province || f.province || '',
+          district: district || f.district || '',
+          subdistrict: subdistrict || f.subdistrict || '',
+          // postcode จะถูกคำนวนอัตโนมัติจากตัวเลือก ถ้าไม่มี ให้ใส่ไว้ก่อน
+          postcode: postcode || f.postcode || '',
         }));
-      } catch {}
-      finally { setLoadingProfile(false); }
+      } catch {
+        // เงียบไว้
+      } finally {
+        setLoadingProfile(false);
+      }
     }
     loadProfile();
   }, [user?.email]);
@@ -75,16 +156,26 @@ export default function CheckoutPage() {
   }, [shippingMethod, subtotal]);
   const totalQty = useMemo(() => (cart || []).reduce((s, it) => s + (it.qty || 0), 0), [cart]);
   const total = subtotal + shipping;
-
   const isEmpty = !cart || cart.length === 0;
 
   function onChange(e) {
     const { name, value } = e.target;
-    setForm((f) => ({ ...f, [name]: value }));
+
+    // reset ลูกเมื่อเปลี่ยนพ่อ
+    if (name === 'province') {
+      setForm(f => ({ ...f, province: value, district: '', subdistrict: '' }));
+      return;
+    }
+    if (name === 'district') {
+      setForm(f => ({ ...f, district: value, subdistrict: '' }));
+      return;
+    }
+
+    setForm(f => ({ ...f, [name]: value }));
   }
 
   function validate() {
-    const required = ['fullName', 'phone', 'addressLine', 'district', 'province', 'postcode'];
+    const required = ['fullName', 'phone', 'addressLine', 'subdistrict', 'district', 'province', 'postcode'];
     for (const k of required) {
       if (!String(form[k] || '').trim()) return `กรุณากรอกข้อมูลให้ครบ: ${k}`;
     }
@@ -101,16 +192,12 @@ export default function CheckoutPage() {
     setErr(null);
     setSubmitting(true);
     try {
-      // ✅ ส่ง variantKey + measures ไปด้วย (หักสต็อกได้ตรงตัวเลือก)
-      // ✅ ไม่เติมคำว่า "นิ้ว" ฝั่ง UI/ payload — ให้แบ็กเอนด์เติมเองตอนบันทึก
+      // เตรียม items
       const items = (cart || []).map((it) => {
         const prettySize =
           it.size
             ? it.size
-            : (it.measures
-                ? `อก ${it.measures.chest_cm}″ / ยาว ${it.measures.length_cm}″`
-                : null);
-
+            : (it.measures ? `อก ${it.measures.chest_in ?? it.measures.chest_cm}″ / ยาว ${it.measures.length_in ?? it.measures.length_cm}″` : null);
         return {
           id: it.id,
           name: it.name,
@@ -118,10 +205,9 @@ export default function CheckoutPage() {
           qty: it.qty || 1,
           image: it.image || null,
           category: it.category || null,
-
-          size: prettySize,               // ไม่เติม "นิ้ว" ใน payload
+          size: prettySize,
           variantKey: it.variantKey ?? null,
-          measures: it.measures ?? null,  // { chest_cm, length_cm }
+          measures: it.measures ?? null,
         };
       });
 
@@ -156,7 +242,7 @@ export default function CheckoutPage() {
         if (!up.ok) throw new Error(upData?.message || 'อัปโหลดสลิปไม่สำเร็จ');
       }
 
-      // 3) อัปเดตโปรไฟล์ (ถ้าติ๊กบันทึก)
+      // 3) อัปเดตโปรไฟล์ (ถ้าติ๊กบันทึก) — ส่งแยกช่องไปด้วย
       if (saveToProfile && user?.email) {
         try {
           await fetch(`${API_BASE}/api/profile`, {
@@ -166,7 +252,11 @@ export default function CheckoutPage() {
               email: user.email,
               username: form.fullName,
               phone: form.phone,
-              address: form.addressLine,
+              address: form.addressLine,        // เก็บเฉพาะบ้านเลขที่/ถนน
+              province: form.province,
+              district: form.district,
+              subdistrict: form.subdistrict,
+              zipcode: form.postcode,
               profile_image:
                 profile?.profile_image ||
                 user?.profile_image ||
@@ -213,7 +303,7 @@ export default function CheckoutPage() {
         {/* ซ้าย: ฟอร์มข้อมูลผู้รับ */}
         <div className="lg:col-span-2 space-y-6">
           {err && (
-            <div className="rounded-xl border border-red-2 00 bg-red-50 text-red-700 p-3 text-sm">
+            <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 p-3 text-sm">
               {err}
             </div>
           )}
@@ -227,11 +317,30 @@ export default function CheckoutPage() {
                 disabled={loadingProfile || !profile}
                 onClick={() => {
                   if (!profile) return;
+                  let province = profile?.province || '';
+                  let district = profile?.district || '';
+                  let subdistrict = profile?.subdistrict || '';
+                  let postcode = profile?.zipcode || profile?.postcode || '';
+                  let addressLine = profile?.address || '';
+
+                  if ((!province || !district || !subdistrict) && addressLine && /ต\..+อ\..+จ\./.test(addressLine)) {
+                    const parsed = parseThaiAddressParts(addressLine);
+                    province = province || parsed.province;
+                    district = district || parsed.district;
+                    subdistrict = subdistrict || parsed.subdistrict;
+                    postcode = postcode || parsed.postcode;
+                    addressLine = parsed.cleanAddress || addressLine;
+                  }
+
                   setForm((f) => ({
                     ...f,
                     fullName: profile?.username || f.fullName || '',
                     phone: profile?.phone || f.phone || '',
-                    addressLine: profile?.address || f.addressLine || '',
+                    addressLine: addressLine || f.addressLine || '',
+                    province: province || f.province || '',
+                    district: district || f.district || '',
+                    subdistrict: subdistrict || f.subdistrict || '',
+                    postcode: postcode || f.postcode || '',
                   }));
                 }}
                 className="text-sm px-3 py-1.5 rounded-lg border hover:bg-neutral-50 disabled:opacity-60"
@@ -244,44 +353,117 @@ export default function CheckoutPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm mb-1">ชื่อ-นามสกุล *</label>
-                <input name="fullName" value={form.fullName} onChange={onChange}
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
+                <input
+                  name="fullName"
+                  value={form.fullName}
+                  onChange={onChange}
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+                />
               </div>
               <div>
                 <label className="block text-sm mb-1">เบอร์โทร *</label>
-                <input name="phone" value={form.phone} onChange={onChange} placeholder="เช่น 0812345678"
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
+                <input
+                  name="phone"
+                  value={form.phone}
+                  onChange={onChange}
+                  placeholder="เช่น 0812345678"
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+                />
               </div>
+
               <div className="md:col-span-2">
-                <label className="block text-sm mb-1">ที่อยู่ ตำบล*</label>
-                <textarea name="addressLine" value={form.addressLine} onChange={onChange} rows={3}
+                <label className="block text-sm mb-1">ที่อยู่ (บ้านเลขที่/หมู่บ้าน/ถนน) *</label>
+                <textarea
+                  name="addressLine"
+                  value={form.addressLine}
+                  onChange={onChange}
+                  rows={3}
                   placeholder="บ้านเลขที่ / หมู่บ้าน / ถนน"
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+                />
               </div>
-              <div>
-                <label className="block text-sm mb-1">อำเภอ *</label>
-                <input name="district" value={form.district} onChange={onChange}
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
-              </div>
+
+              {/* จังหวัด */}
               <div>
                 <label className="block text-sm mb-1">จังหวัด *</label>
-                <input name="province" value={form.province} onChange={onChange}
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
+                <select
+                  name="province"
+                  value={form.province}
+                  onChange={onChange}
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+                >
+                  <option value="">-- เลือกจังหวัด --</option>
+                  {provinceOptions.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
               </div>
+
+              {/* อำเภอ/เขต */}
+              <div>
+                <label className="block text-sm mb-1">อำเภอ/เขต *</label>
+                <select
+                  name="district"
+                  value={form.district}
+                  onChange={onChange}
+                  disabled={!form.province}
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 disabled:bg-neutral-100"
+                >
+                  <option value="">-- เลือกอำเภอ --</option>
+                  {districtOptions.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* ตำบล/แขวง */}
+              <div>
+                <label className="block text-sm mb-1">ตำบล/แขวง *</label>
+                <select
+                  name="subdistrict"
+                  value={form.subdistrict}
+                  onChange={onChange}
+                  disabled={!form.district}
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 disabled:bg-neutral-100"
+                >
+                  <option value="">-- เลือกตำบล --</option>
+                  {subdistrictOptions.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Zipcode (auto) */}
               <div>
                 <label className="block text-sm mb-1">รหัสไปรษณีย์ *</label>
-                <input name="postcode" value={form.postcode} onChange={onChange} placeholder="เช่น 10110"
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
+                <input
+                  name="postcode"
+                  value={form.postcode}
+                  onChange={onChange}
+                  readOnly
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 px-3 py-2 cursor-not-allowed"
+                  placeholder="จะขึ้นอัตโนมัติเมื่อเลือกตำบล"
+                />
               </div>
+
               <div className="md:col-span-2">
                 <label className="block text-sm mb-1">หมายเหตุ (ถ้ามี)</label>
-                <input name="note" value={form.note} onChange={onChange} placeholder="ฝากร้าน/คนส่ง ฯลฯ"
-                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2" />
+                <input
+                  name="note"
+                  value={form.note}
+                  onChange={onChange}
+                  placeholder="ฝากร้าน/คนส่ง ฯลฯ"
+                  className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+                />
               </div>
             </div>
 
             <label className="mt-3 flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={saveToProfile} onChange={(e) => setSaveToProfile(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={saveToProfile}
+                onChange={(e) => setSaveToProfile(e.target.checked)}
+              />
               อัปเดตชื่อ/เบอร์/ที่อยู่ไปยังโปรไฟล์ของฉัน
             </label>
           </section>
@@ -291,93 +473,101 @@ export default function CheckoutPage() {
             <h2 className="text-lg font-bold mb-4">วิธีจัดส่ง</h2>
             <div className="space-y-3">
               <label className="flex items-center gap-3">
-                <input type="radio" name="ship" value="standard"
-                  checked={shippingMethod === 'standard'} onChange={() => setShippingMethod('standard')} />
+                <input
+                  type="radio"
+                  name="ship"
+                  value="standard"
+                  checked={shippingMethod === 'standard'}
+                  onChange={() => setShippingMethod('standard')}
+                />
                 <span>
-                  Standard (฿{SHIPPING_FEE_STANDARD}) — <span className="text-neutral-500">ฟรีเมื่อยอดถึง {formatTHB(SHIPPING_THRESHOLD)}</span>
+                  Standard (฿{SHIPPING_FEE_STANDARD}) —{' '}
+                  <span className="text-neutral-500">ฟรีเมื่อยอดถึง {formatTHB(SHIPPING_THRESHOLD)}</span>
                 </span>
               </label>
               <label className="flex items-center gap-3">
-                <input type="radio" name="ship" value="express"
-                  checked={shippingMethod === 'express'} onChange={() => setShippingMethod('express')} />
+                <input
+                  type="radio"
+                  name="ship"
+                  value="express"
+                  checked={shippingMethod === 'express'}
+                  onChange={() => setShippingMethod('express')}
+                />
                 <span>Express (฿{SHIPPING_FEE_EXPRESS})</span>
               </label>
             </div>
           </section>
 
-       {/* วิธีชำระเงิน */}
-<section className="bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-5">
-  <h2 className="text-lg font-bold mb-4">วิธีชำระเงิน</h2>
-  <div className="space-y-3">
-    <label className="flex items-center gap-3">
-      <input
-        type="radio"
-        name="pay"
-        value="cod"
-        checked={paymentMethod === 'cod'}
-        onChange={() => setPaymentMethod('cod')}
-      />
-      <span>ชำระเงินปลายทาง (COD)</span>
-    </label>
-    <label className="flex items-center gap-3">
-      <input
-        type="radio"
-        name="pay"
-        value="transfer"
-        checked={paymentMethod === 'transfer'}
-        onChange={() => setPaymentMethod('transfer')}
-      />
-      <span>โอนผ่านธนาคาร / พร้อมเพย์</span>
-    </label>
-  </div>
+          {/* วิธีชำระเงิน */}
+          <section className="bg-white dark:bg-neutral-900 rounded-2xl shadow-sm border border-neutral-200/70 dark:border-neutral-800 p-5">
+            <h2 className="text-lg font-bold mb-4">วิธีชำระเงิน</h2>
+            <div className="space-y-3">
+              <label className="flex items-center gap-3">
+                <input
+                  type="radio"
+                  name="pay"
+                  value="cod"
+                  checked={paymentMethod === 'cod'}
+                  onChange={() => setPaymentMethod('cod')}
+                />
+                <span>ชำระเงินปลายทาง (COD)</span>
+              </label>
+              <label className="flex items-center gap-3">
+                <input
+                  type="radio"
+                  name="pay"
+                  value="transfer"
+                  checked={paymentMethod === 'transfer'}
+                  onChange={() => setPaymentMethod('transfer')}
+                />
+                <span>โอนผ่านธนาคาร / พร้อมเพย์</span>
+              </label>
+            </div>
 
-  {paymentMethod === 'transfer' && (
-    <div className="mt-4 space-y-4 rounded-xl border border-neutral-200 dark:border-neutral-700 p-4 bg-neutral-50 dark:bg-neutral-900/40">
-      {/* ✅ ข้อมูลบัญชี + QR */}
-      <div className="text-center">
-        <div className="text-sm">
-          <div className="font-semibold">กสิกรไทย / KBank</div>
-          <div>เลขบัญชี: <span className="font-mono">459-545-7625-9595</span></div>
-          <div>พร้อมเพย์: <span className="font-mono">098-840-5158</span></div>
-        </div>
+            {paymentMethod === 'transfer' && (
+              <div className="mt-4 space-y-4 rounded-xl border border-neutral-200 dark:border-neutral-700 p-4 bg-neutral-50 dark:bg-neutral-900/40">
+                <div className="text-center">
+                  <div className="text-sm">
+                    <div className="font-semibold">กสิกรไทย / KBank</div>
+                    <div>เลขบัญชี: <span className="font-mono">459-545-7625-9595</span></div>
+                    <div>พร้อมเพย์: <span className="font-mono">098-840-5158</span></div>
+                  </div>
+                  <p className="text-sm text-neutral-600 mt-2">สแกน QR เพื่อชำระเงิน</p>
+                  <img
+                    src="/assets/image/qrcode.jpg"
+                    alt="QR Code สำหรับโอนเงิน"
+                    className="w-48 h-48 mx-auto rounded-xl border shadow-sm"
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                  <p className="mt-2 text-xs text-neutral-500">
+                    * หลังโอนเงินแล้ว กรุณาแนบสลิปเพื่อยืนยัน
+                  </p>
+                </div>
 
-        <p className="text-sm text-neutral-600 mt-2">สแกน QR เพื่อชำระเงิน</p>
-        <img
-         src="/assets/image/qrcode.jpg"
-  alt="QR Code สำหรับโอนเงิน"
-  className="w-48 h-48 mx-auto rounded-xl border shadow-sm"
-          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-        />
-        <p className="mt-2 text-xs text-neutral-500">
-          * หลังโอนเงินแล้ว กรุณาแนบสลิปเพื่อยืนยัน
-        </p>
-      </div>
+                <div>
+                  <label className="block text-sm mb-1">แนบรูปสลิป *</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => setSlipFile(e.target.files?.[0] || null)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">ยอดที่โอน</label>
+                  <input
+                    value={slipAmount}
+                    onChange={(e) => setSlipAmount(e.target.value)}
+                    placeholder=""
+                    className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
+                  />
+                </div>
 
-      {/* แนบสลิป + ยอดที่โอน */}
-      <div>
-        <label className="block text-sm mb-1">แนบรูปสลิป *</label>
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => setSlipFile(e.target.files?.[0] || null)}
-        />
-      </div>
-      <div>
-        <label className="block text-sm mb-1">ยอดที่โอน</label>
-        <input
-          value={slipAmount}
-          onChange={(e) => setSlipAmount(e.target.value)}
-          placeholder=""
-          className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2"
-        />
-      </div>
-
-      <p className="text-xs text-neutral-500">
-        หลังส่งคำสั่งซื้อ สลิปจะถูกอัปโหลดให้อัตโนมัติและรอแอดมินตรวจสอบ
-      </p>
-    </div>
-  )}
-</section>
+                <p className="text-xs text-neutral-500">
+                  หลังส่งคำสั่งซื้อ สลิปจะถูกอัปโหลดให้อัตโนมัติและรอแอดมินตรวจสอบ
+                </p>
+              </div>
+            )}
+          </section>
         </div>
 
         {/* ขวา: สรุปคำสั่งซื้อ */}
@@ -389,12 +579,10 @@ export default function CheckoutPage() {
               {cart.map((it) => {
                 const price = Number(it.price) || 0;
                 const qty = it.qty || 1;
-
-                // แสดงผลสวย ๆ ฝั่ง UI (ไม่เติม "นิ้ว")
                 const prettySize =
                   it.size
                     ? it.size
-                    : (it.measures ? `อก ${it.measures.chest_in}″ / ยาว ${it.measures.length_in}″` : null);
+                    : (it.measures ? `อก ${it.measures.chest_in ?? it.measures.chest_cm}″ / ยาว ${it.measures.length_in ?? it.measures.length_cm}″` : null);
 
                 return (
                   <li
