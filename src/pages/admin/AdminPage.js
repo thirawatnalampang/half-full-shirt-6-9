@@ -900,27 +900,31 @@ async function saveStatus() {
                     </span>
                   </td>
 
-                  {/* การชำระเงิน: ป้ายไม่หักบรรทัด */}
-                  <td className="px-4 py-3">
-                    <span className={chip(payClass(o.payment_status))}>
-                      {PAY_LABELS[o.payment_status || "unpaid"]}
-                    </span>
-                    <span className="ml-2 text-xs text-neutral-400">
-                      {PAYMENT_METHOD_TH[o.payment_method] || "-"}
-                    </span>
-                    {o.payment_status === 'submitted' && !o.slip_image && (
-                      <span className="ml-2 text-xs text-amber-400">(ไม่มีไฟล์)</span>
-                    )}
-                    {o.slip_image && (
-                      <a
-                        href={`http://localhost:3000${o.slip_image}`}
-                        target="_blank" rel="noreferrer"
-                        className="ml-2 underline text-xs text-neutral-300"
-                      >
-                        ดูสลิป
-                      </a>
-                    )}
-                  </td>
+                 <td className="px-4 py-3 whitespace-nowrap">
+  <span className={chip(payClass(o.payment_status))}>
+    {PAY_LABELS[o.payment_status || "unpaid"]}
+  </span>
+
+  {o.payment_method && (
+    <span className="ml-2 text-xs text-neutral-400">
+      {PAYMENT_METHOD_TH[o.payment_method] || o.payment_method}
+    </span>
+  )}
+
+  {o.payment_status === 'submitted' && !o.slip_image && (
+    <span className="ml-2 text-xs text-amber-400">(ไม่มีไฟล์)</span>
+  )}
+
+  {o.slip_image && (
+    <a
+      href={`http://localhost:3000${o.slip_image}`}
+      target="_blank" rel="noreferrer"
+      className="ml-2 underline text-xs text-neutral-300"
+    >
+      ดูสลิป
+    </a>
+  )}
+</td>
 
                   {/* คอลัมน์ติดตาม */}
                   <td className="px-4 py-3">
@@ -1083,7 +1087,9 @@ async function saveStatus() {
                 <div className="text-neutral-400 text-sm mb-1">การจัดส่ง/ชำระเงิน</div>
                 <div className="text-neutral-300 text-sm">จัดส่ง: {detail.order.shipping_method || "-"}</div>
                 <div className="text-neutral-300 text-sm">
-                  ชำระเงิน: {PAYMENT_METHOD_TH[detail.order.payment_method] || "-"}
+                  ชำระเงิน: {detail.order.payment_method
+  ? (PAYMENT_METHOD_TH[detail.order.payment_method] || detail.order.payment_method)
+  : "—"}
                 </div>
                 {detail.order.note && <div className="text-neutral-300 text-sm mt-1">หมายเหตุ: {detail.order.note}</div>}
 
